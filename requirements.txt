@@ -1,0 +1,4 @@
+openai-whisper
+SpeechRecognition
+PyAudio
+indic-transliteration
