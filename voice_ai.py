@@ -1,91 +1,121 @@
+import os
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+
+import time
 import speech_recognition as sr
 import whisper
-import os
-os.environ["PATH"] += os.pathsep + r"C:\Users\egyan\AppData\Local\Microsoft\WinGet\Packages"
+import pygame
+from gtts import gTTS
 
-def capture_and_press_complaint(model):
+
+def speak_confirmation(text, lang="ta"):
+    filename = "confirmation.mp3"
+
+    try:
+        tts = gTTS(text=text, lang=lang)
+        tts.save(filename)
+
+        pygame.mixer.init()
+        pygame.mixer.music.load(filename)
+        pygame.mixer.music.play()
+
+        while pygame.mixer.music.get_busy():
+            time.sleep(0.1)
+
+    except Exception:
+        pass
+
+    finally:
+        if pygame.mixer.get_init():
+            pygame.mixer.music.stop()
+            pygame.mixer.quit()
+
+        if os.path.exists(filename):
+            try:
+                os.remove(filename)
+            except OSError:
+                pass
+
+
+def capture_and_process_complaint(model):
     recognizer = sr.Recognizer()
-    
-    # 2.5-second pause threshold for natural pauses
     recognizer.pause_threshold = 2.5
-    recognizer.dynamic_energy_threshold = True
+    audio_filename = "complaint.wav"
 
-    print("\nSpeak now / இப்போது பேசுங்கள்...")
+    print("Speak now / இப்போது பேசுங்கள்")
 
     try:
         with sr.Microphone() as source:
-            recognizer.adjust_for_ambient_noise(source, duration=1)
+            recognizer.adjust_for_ambient_noise(
+                source, duration=1
+            )
             audio = recognizer.listen(
                 source,
                 timeout=12,
                 phrase_time_limit=45
             )
 
-        # Save audio file temporarily for Whisper processing
-        audio_filename = "complaint.wav"
         with open(audio_filename, "wb") as file:
             file.write(audio.get_wav_data())
 
-        # Transcribe with hallucination suppression
         result = model.transcribe(
             audio_filename,
             task="transcribe",
             fp16=False,
             temperature=0,
-            no_speech_threshold=0.6,
-            condition_on_previous_text=False,
-            initial_prompt=(
-                "கிராமத்து மற்றும் பழங்குடி மக்களின் தமிழ் புகார்கள். "
-                "ரோடு குழி குழியா இருக்கு, ரோடு சரியில்ல, ரோடு போதக்குழி இருக்கு, "
-                "தண்ணி வரல, குடிநீர் வராம இருக்கு, குழாய் உடைஞ்சு போச்சு, "
-                "சாக்கடை அடைச்சுக்குச்சு, தன்னி தேங்கி நிக்குது, "
-                "குப்பை அள்ளல, தெருவிளக்கு எரியல, கரண்ட் இல்ல. "
-                "Road-ula pothakuli irukku, kunnu kuliyuma irukku road."
-            )
+            condition_on_previous_text=False
         )
 
         complaint_text = result["text"].strip()
-        detected_language = result.get("language", "unknown")
+        language = result.get("language", "unknown")
 
-        # Reject hallucinated non-target languages (like Sinhala, Malayalam, etc.)
-        if detected_language not in ["ta", "en"]:
-            print("\n[Error] Unclear audio detected. Please speak your complaint clearly.")
+        if language not in ("ta", "en") or len(complaint_text) < 3:
             return None, None
 
-        # Filter repetitive hallucinated characters
-        if len(complaint_text) > 10 and len(set(complaint_text)) < 5:
-            print("\n[Error] Unclear audio detected. Please try again.")
-            return None, None
-
-        if not complaint_text or len(complaint_text) < 3:
-            print("\n[Error] Could not understand clearly. Please try again.")
-            return None, None
-
-        # Clean output matching language
-        print("\n---------------------------------------------")
-        if detected_language == "ta":
-            print("உங்கள் புகார்:")
-        elif detected_language == "en":
-            print("Your complaint:")
+        if language == "ta":
+            translated = model.transcribe(
+                audio_filename,
+                task="translate",
+                fp16=False,
+                temperature=0
+            )
+            english_text = translated["text"].strip()
         else:
-            print("Your complaint / உங்கள் புகார்:")
+            english_text = complaint_text
+        print("-----------------------------------------------")
+        print("\nYour Complaint / உங்கள் புகார்:")
+        print(complaint_text)
+        print("-----------------------------------------------")
 
-        print(f'"{complaint_text}"')
-        print("---------------------------------------------\n")
 
-        return complaint_text, detected_language
+        if language == "ta":
+            speak_confirmation(
+                "உங்கள் புகார் பதிவு செய்யப்பட்டது",
+                lang="ta"
+            )
+        else:
+            speak_confirmation(
+                "Your complaint has been registered",
+                lang="en"
+            )
 
-    except sr.WaitTimeoutError:
-        print("\n[Error] No speech detected. Please try again.")
+        return english_text, language
+
+    except (sr.WaitTimeoutError, sr.UnknownValueError):
         return None, None
 
-    except Exception as error:
-        print(f"\n[Error] An error occurred: {error}")
+    except Exception:
         return None, None
+
+    finally:
+        if os.path.exists(audio_filename):
+            try:
+                os.remove(audio_filename)
+            except OSError:
+                pass
+
 
 if __name__ == "__main__":
-    # Silently load the model
     model = whisper.load_model("small")
-    
-    # Run voice capture
-    capture_and_press_complaint(model)
+    capture_and_process_complaint(model)
