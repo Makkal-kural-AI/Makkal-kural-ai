@@ -2,3 +2,5 @@ openai-whisper
 SpeechRecognition
 PyAudio
 indic-transliteration
+gTTS
+pygame
