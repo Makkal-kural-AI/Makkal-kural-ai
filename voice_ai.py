@@ -1,3 +1,4 @@
+
 import os
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
@@ -23,8 +24,8 @@ def speak_confirmation(text, lang="ta"):
         while pygame.mixer.music.get_busy():
             time.sleep(0.1)
 
-    except Exception:
-        pass
+    except Exception as error:
+        print(f"Voice confirmation failed: {error}")
 
     finally:
         if pygame.mixer.get_init():
@@ -56,13 +57,11 @@ def capture_and_process_complaint(model):
                 phrase_time_limit=45
             )
 
-    except sr.WaitTimeoutError:
-        print("No speech detected. Please try again.")
-        return None, None      
-
+        # Save recorded audio
         with open(audio_filename, "wb") as file:
             file.write(audio.get_wav_data())
 
+        # Convert speech to text
         result = model.transcribe(
             audio_filename,
             task="transcribe",
@@ -75,24 +74,29 @@ def capture_and_process_complaint(model):
         language = result.get("language", "unknown")
 
         if language not in ("ta", "en") or len(complaint_text) < 3:
+            print("Could not understand the complaint. Please try again.")
             return None, None
 
+        # Translate Tamil complaint to English
         if language == "ta":
             translated = model.transcribe(
                 audio_filename,
                 task="translate",
                 fp16=False,
-                temperature=0
+                temperature=0,
+                condition_on_previous_text=False
             )
             english_text = translated["text"].strip()
         else:
             english_text = complaint_text
+
         print("-----------------------------------------------")
         print("\nYour Complaint / உங்கள் புகார்:")
         print(complaint_text)
         print("-----------------------------------------------")
 
-
+        # Confirm that the complaint was heard,
+        # not that it was already saved in the database.
         if language == "ta":
             speak_confirmation(
                 "உங்கள் புகார் பதிவு செய்யப்பட்டது",
@@ -104,12 +108,19 @@ def capture_and_process_complaint(model):
                 lang="en"
             )
 
+
         return english_text, language
 
-    except (sr.WaitTimeoutError, sr.UnknownValueError):
+    except sr.WaitTimeoutError:
+        print("No speech detected. Please try again.")
         return None, None
 
-    except Exception:
+    except sr.UnknownValueError:
+        print("Could not understand the speech. Please try again.")
+        return None, None
+
+    except Exception as error:
+        print(f"Voice processing failed: {error}")
         return None, None
 
     finally:
@@ -119,7 +130,9 @@ def capture_and_process_complaint(model):
             except OSError:
                 pass
 
+
 _model = None
+
 
 def get_voice_complaint():
     global _model
@@ -133,6 +146,8 @@ def get_voice_complaint():
         return None
 
     return english_text
+
+
 if __name__ == "__main__":
     model = whisper.load_model("small")
     capture_and_process_complaint(model)

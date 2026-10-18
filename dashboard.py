@@ -204,8 +204,8 @@ if page == "Submit Complaint":
                     "to check your complaint later."
                 )
 
-                st.session_state["complaint_text"] = ""
                 st.session_state["voice_message"] = ""
+                st.rerun()
 
             except sqlite3.Error as error:
                 st.error(f"Could not save complaint: {error}")
