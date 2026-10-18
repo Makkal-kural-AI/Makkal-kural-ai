@@ -56,6 +56,10 @@ def capture_and_process_complaint(model):
                 phrase_time_limit=45
             )
 
+    except sr.WaitTimeoutError:
+        print("No speech detected. Please try again.")
+        return None, None      
+
         with open(audio_filename, "wb") as file:
             file.write(audio.get_wav_data())
 
@@ -115,7 +119,20 @@ def capture_and_process_complaint(model):
             except OSError:
                 pass
 
+_model = None
 
+def get_voice_complaint():
+    global _model
+
+    if _model is None:
+        _model = whisper.load_model("small")
+
+    english_text, language = capture_and_process_complaint(_model)
+
+    if not english_text:
+        return None
+
+    return english_text
 if __name__ == "__main__":
     model = whisper.load_model("small")
     capture_and_process_complaint(model)
