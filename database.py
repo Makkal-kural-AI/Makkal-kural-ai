@@ -11,12 +11,13 @@ DB_PATH = BASE_DIR / "complaints.db"
 
 def get_connection():
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
 def init_db():
-    """Create or update the complaints database."""
+    """Create the database and add missing columns safely."""
 
     with closing(get_connection()) as conn:
         with conn:
@@ -24,25 +25,67 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS complaints (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tracking_id TEXT UNIQUE NOT NULL,
-                    complaint_text TEXT NOT NULL,
+                    complaint_text TEXT NOT NULL DEFAULT '',
                     category TEXT NOT NULL DEFAULT 'Other',
                     location TEXT NOT NULL DEFAULT 'Not provided',
-                    created_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'Pending'
                 )
             """)
 
             columns = {
-                row[1]
+                row["name"]
                 for row in conn.execute(
                     "PRAGMA table_info(complaints)"
                 ).fetchall()
             }
 
-            if "source_id" not in columns:
+            # Add columns that may be missing in older versions.
+            additions = {
+                "tracking_id": "TEXT",
+                "complaint_text": "TEXT NOT NULL DEFAULT ''",
+                "category": "TEXT NOT NULL DEFAULT 'Other'",
+                "location": "TEXT NOT NULL DEFAULT 'Not provided'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+                "status": "TEXT NOT NULL DEFAULT 'Pending'",
+                "source_id": "TEXT",
+                "name": "TEXT",
+                "description": "TEXT",
+                "village": "TEXT",
+                "district": "TEXT",
+                "latitude": "REAL",
+                "longitude": "REAL",
+            }
+
+            for column, column_type in additions.items():
+                if column not in columns:
+                    conn.execute(
+                        f"ALTER TABLE complaints "
+                        f"ADD COLUMN {column} {column_type}"
+                    )
+
+            columns = {
+                row["name"]
+                for row in conn.execute(
+                    "PRAGMA table_info(complaints)"
+                ).fetchall()
+            }
+
+            # Copy data from older column names where possible.
+            if "description" in columns:
                 conn.execute("""
-                    ALTER TABLE complaints
-                    ADD COLUMN source_id TEXT
+                    UPDATE complaints
+                    SET complaint_text = description
+                    WHERE (complaint_text IS NULL OR complaint_text = '')
+                      AND description IS NOT NULL
+                """)
+
+            if "village" in columns:
+                conn.execute("""
+                    UPDATE complaints
+                    SET location = village
+                    WHERE (location IS NULL OR location = '')
+                      AND village IS NOT NULL
                 """)
 
             conn.execute("""
@@ -54,52 +97,59 @@ def init_db():
 
 
 def save_complaint(
-    complaint_text,
+    complaint_text=None,
     category="Other",
     location="Not provided",
-    source_id=None
+    source_id=None,
+    *,
+    name="",
+    description=None,
+    village=None,
+    district=None,
+    latitude=None,
+    longitude=None,
 ):
-    """Save a complaint and return its tracking ID.
-
-    source_id identifies an offline submission so retries
-    cannot create another record for the same submission.
-    """
+    """Save a complaint and return (tracking_id, created_at)."""
 
     init_db()
 
-    complaint_text = str(complaint_text or "").strip()
+    text = str(description or complaint_text or "").strip()
 
-    if not complaint_text:
+    if not text:
         raise ValueError("Complaint text cannot be empty.")
 
     category = str(category or "Other").strip() or "Other"
-    location = str(location or "Not provided").strip()
-    location = location or "Not provided"
+    name = str(name or "").strip()
+    village = str(village or location or "Not provided").strip()
+    district = str(district or "").strip()
+
+    if not village:
+        village = "Not provided"
+
+    full_location = (
+        f"{village}, {district}" if district else village
+    )
 
     if source_id is not None:
-        source_id = str(source_id).strip()
-        if not source_id:
-            source_id = None
+        source_id = str(source_id).strip() or None
 
     with closing(get_connection()) as conn:
         with conn:
-            # BEGIN IMMEDIATE serializes competing writers.
             conn.execute("BEGIN IMMEDIATE")
 
+            # Avoid duplicate records when the same source is retried.
             if source_id:
                 existing = conn.execute("""
-                    SELECT tracking_id
+                    SELECT tracking_id, created_at
                     FROM complaints
                     WHERE source_id = ?
                 """, (source_id,)).fetchone()
 
                 if existing:
-                    return existing[0]
+                    return existing["tracking_id"], existing["created_at"]
 
-            tracking_id = "MK-" + uuid.uuid4().hex[:8].upper()
-            created_at = datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            tracking_id = "MKAI-" + uuid.uuid4().hex[:10].upper()
+            created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             conn.execute("""
                 INSERT INTO complaints (
@@ -109,70 +159,110 @@ def save_complaint(
                     location,
                     created_at,
                     status,
-                    source_id
+                    source_id,
+                    name,
+                    description,
+                    village,
+                    district,
+                    latitude,
+                    longitude
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 tracking_id,
-                complaint_text,
+                text,
                 category,
-                location,
+                full_location,
                 created_at,
-                "Pending",
-                source_id
+                "Submitted",
+                source_id,
+                name,
+                text,
+                village,
+                district,
+                latitude,
+                longitude,
             ))
 
-            return tracking_id
+            return tracking_id, created_at
 
 
-def get_all_complaints():
-    """Retrieve all complaints, newest first."""
-
-    init_db()
-
-    with closing(get_connection()) as conn:
-        conn.row_factory = sqlite3.Row
-
-        rows = conn.execute("""
-            SELECT
-                id,
-                tracking_id,
-                complaint_text,
-                category,
-                location,
-                created_at,
-                status
-            FROM complaints
-            ORDER BY id DESC
-        """).fetchall()
-
-        return [dict(row) for row in rows]
-
-
-def get_complaint_by_tracking_id(tracking_id):
-    """Retrieve a complaint using its tracking ID."""
+def get_complaint(tracking_id):
+    """Find one complaint using its tracking ID."""
 
     init_db()
 
     with closing(get_connection()) as conn:
-        conn.row_factory = sqlite3.Row
-
         row = conn.execute("""
             SELECT *
             FROM complaints
             WHERE tracking_id = ?
         """, (str(tracking_id).strip(),)).fetchone()
 
-        return dict(row) if row else None
+        if not row:
+            return None
+
+        complaint = dict(row)
+        complaint["description"] = (
+            complaint.get("description")
+            or complaint.get("complaint_text")
+            or ""
+        )
+        complaint["village"] = (
+            complaint.get("village")
+            or complaint.get("location")
+            or "Not provided"
+        )
+        complaint["district"] = complaint.get("district") or ""
+
+        return complaint
+
+
+def get_complaint_by_tracking_id(tracking_id):
+    """Alternative function name for tracking a complaint."""
+    return get_complaint(tracking_id)
+
+
+def get_all_complaints():
+    """Return all complaints, newest first."""
+
+    init_db()
+
+    with closing(get_connection()) as conn:
+        rows = conn.execute("""
+            SELECT *
+            FROM complaints
+            ORDER BY id DESC
+        """).fetchall()
+
+        results = []
+
+        for row in rows:
+            item = dict(row)
+            item["description"] = (
+                item.get("description")
+                or item.get("complaint_text")
+                or ""
+            )
+            item["village"] = (
+                item.get("village")
+                or item.get("location")
+                or "Not provided"
+            )
+            item["district"] = item.get("district") or ""
+            results.append(item)
+
+        return results
 
 
 def update_status(tracking_id, new_status):
-    """Update the status of a complaint."""
+    """Update a complaint's status."""
 
     allowed_statuses = {
         "Pending",
+        "Submitted",
         "In Progress",
-        "Resolved"
+        "Resolved",
     }
 
     if new_status not in allowed_statuses:
