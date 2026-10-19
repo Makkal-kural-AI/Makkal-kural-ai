@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 .env
 *.wav
-pyvenv.cfg
+pyvenv.cfg.vscode/
+complaints.db
