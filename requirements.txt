@@ -1,3 +1,6 @@
+
+streamlit
+streamlit-mic-recorder
 openai-whisper
 SpeechRecognition
 PyAudio
