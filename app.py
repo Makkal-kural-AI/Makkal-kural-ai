@@ -311,6 +311,9 @@ else:
             "Makkal Kural AI helps communities report "
             "local problems through a complaint management system."
         )
+        st.markdown(
+            "[Open the live app](https://makkal-kural-ai.onrender.com)"
+        )
 
     if st.button("← Back to Home", key="back_home"):
         go("Home")

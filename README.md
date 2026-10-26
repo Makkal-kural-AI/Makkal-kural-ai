@@ -40,6 +40,8 @@ Keep the service role key server-side and never expose it in browser code.
 
 The repository includes a Render Blueprint and Dockerfile. In Render, create a new Blueprint from this repository and provide `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` when prompted. Run the SQL setup above before deploying. The container installs FFmpeg for Whisper and starts the existing UI with Streamlit; the service listens on Render's assigned port.
 
+Live app: [Makkal Kural AI](https://makkal-kural-ai.onrender.com)
+
 Whisper downloads its model the first time voice transcription is used. Allow enough memory for the model and Torch runtime, and note that ephemeral instances may need to download the model again after a restart.
 
 ## Voice AI Module
