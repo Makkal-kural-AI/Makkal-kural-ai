@@ -1,201 +1,81 @@
+"""Makkal Kural AI: Tamil/English Whisper transcription.
 
+Browser recordings are handled by transcribe_audio_bytes().
+Local microphone testing is available through get_voice_complaint().
+No success message is spoken until the dashboard confirms database saving.
+"""
 import os
 import tempfile
-
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
-
-import time
-import speech_recognition as sr
-import whisper
-import pygame
-from gtts import gTTS
+from functools import lru_cache
 
 
-def speak_confirmation(text, lang="ta"):
-    filename = "confirmation.mp3"
-
-    try:
-        tts = gTTS(text=text, lang=lang)
-        tts.save(filename)
-
-        pygame.mixer.init()
-        pygame.mixer.music.load(filename)
-        pygame.mixer.music.play()
-
-        while pygame.mixer.music.get_busy():
-            time.sleep(0.1)
-
-    except Exception as error:
-        print(f"Voice confirmation failed: {error}")
-
-    finally:
-        if pygame.mixer.get_init():
-            pygame.mixer.music.stop()
-            pygame.mixer.quit()
-
-        if os.path.exists(filename):
-            try:
-                os.remove(filename)
-            except OSError:
-                pass
+@lru_cache(maxsize=1)
+def _get_model():
+    import whisper
+    # Set WHISPER_MODEL=small if accuracy requires it and hosting has enough RAM.
+    return whisper.load_model(os.getenv("WHISPER_MODEL", "base"))
 
 
-def capture_and_process_complaint(model):
-    recognizer = sr.Recognizer()
-    recognizer.pause_threshold = 2.5
-    audio_filename = "complaint.wav"
-
-    print("Speak now / இப்போது பேசுங்கள்")
-
-    try:
-        with sr.Microphone() as source:
-            recognizer.adjust_for_ambient_noise(
-                source, duration=1
-            )
-            audio = recognizer.listen(
-                source,
-                timeout=12,
-                phrase_time_limit=45
-            )
-
-        # Save recorded audio
-        with open(audio_filename, "wb") as file:
-            file.write(audio.get_wav_data())
-
-        # Convert speech to text
-        result = model.transcribe(
-            audio_filename,
-            task="transcribe",
-            fp16=False,
-            temperature=0,
-            condition_on_previous_text=False
-        )
-
-        complaint_text = result["text"].strip()
-        language = result.get("language", "unknown")
-
-        if language not in ("ta", "en") or len(complaint_text) < 3:
-            print("Could not understand the complaint. Please try again.")
-            return None, None
-
-        # Translate Tamil complaint to English
-        if language == "ta":
-            translated = model.transcribe(
-                audio_filename,
-                task="translate",
-                fp16=False,
-                temperature=0,
-                condition_on_previous_text=False
-            )
-            english_text = translated["text"].strip()
-        else:
-            english_text = complaint_text
-
-        print("-----------------------------------------------")
-        print("\nYour Complaint / உங்கள் புகார்:")
-        print(complaint_text)
-        print("-----------------------------------------------")
-
-        # Confirm that the complaint was heard,
-        # not that it was already saved in the database.
-        if language == "ta":
-            speak_confirmation(
-                "உங்கள் புகார் பதிவு செய்யப்பட்டது",
-                lang="ta"
-            )
-        else:
-            speak_confirmation(
-                "Your complaint has been registered",
-                lang="en"
-            )
-
-
-        return english_text, language
-
-    except sr.WaitTimeoutError:
-        print("No speech detected. Please try again.")
-        return None, None
-
-    except sr.UnknownValueError:
-        print("Could not understand the speech. Please try again.")
-        return None, None
-
-    except Exception as error:
-        print(f"Voice processing failed: {error}")
-        return None, None
-
-    finally:
-        if os.path.exists(audio_filename):
-            try:
-                os.remove(audio_filename)
-            except OSError:
-                pass
-
-
-_model = None
-
-
-def transcribe_audio_bytes(audio_bytes):
-    """Transcribe browser-recorded WAV audio with the shared Whisper model."""
-    global _model
-
-    if not audio_bytes:
+def _transcribe_file(filename):
+    model = _get_model()
+    result = model.transcribe(
+        filename,
+        task="transcribe",
+        fp16=False,
+        temperature=0,
+        condition_on_previous_text=False,
+    )
+    original = str(result.get("text", "")).strip()
+    language = result.get("language", "unknown")
+    if language not in ("ta", "en") or len(original) < 3:
         return None
-
-    if _model is None:
-        _model = whisper.load_model("small")
-
-    suffix = ".wav"
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as audio_file:
-            audio_file.write(audio_bytes)
-            temp_path = audio_file.name
-
-        result = _model.transcribe(
-            temp_path,
-            task="transcribe",
+    if language == "ta":
+        translated = model.transcribe(
+            filename,
+            task="translate",
             fp16=False,
             temperature=0,
             condition_on_previous_text=False,
         )
-        text = str(result.get("text", "")).strip()
-        language = result.get("language", "unknown")
-        if language not in ("ta", "en") or len(text) < 3:
-            return None
+        return str(translated.get("text", "")).strip() or original
+    return original
 
-        if language == "ta":
-            translated = _model.transcribe(
-                temp_path,
-                task="translate",
-                fp16=False,
-                temperature=0,
-                condition_on_previous_text=False,
-            )
-            return str(translated.get("text", "")).strip() or text
-        return text
+
+def transcribe_audio_bytes(audio_bytes):
+    """Return English complaint text from a browser WAV recording, or None."""
+    if not audio_bytes:
+        return None
+    filename = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as audio_file:
+            audio_file.write(audio_bytes)
+            filename = audio_file.name
+        return _transcribe_file(filename)
     finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
+        if filename and os.path.exists(filename):
+            os.remove(filename)
 
 
 def get_voice_complaint():
-    global _model
+    """Local-only microphone test; do not use on Render for website visitors."""
+    import speech_recognition as sr
 
-    if _model is None:
-        _model = whisper.load_model("small")
-
-    english_text, language = capture_and_process_complaint(_model)
-
-    if not english_text:
-        return None
-
-    return english_text
+    recognizer = sr.Recognizer()
+    recognizer.pause_threshold = 2.5
+    print("Speak now / இப்போது பேசுங்கள்")
+    with sr.Microphone() as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        try:
+            audio = recognizer.listen(source, timeout=12, phrase_time_limit=45)
+        except sr.WaitTimeoutError:
+            print("No speech detected.")
+            return None
+    text = transcribe_audio_bytes(audio.get_wav_data())
+    if text:
+        print("Your Complaint / உங்கள் புகார்:")
+        print(text)
+    return text
 
 
 if __name__ == "__main__":
-    model = whisper.load_model("small")
-    capture_and_process_complaint(model)
+    print(get_voice_complaint() or "No complaint recognized.")
