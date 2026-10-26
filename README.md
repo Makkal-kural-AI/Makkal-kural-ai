@@ -23,6 +23,21 @@ Makkal Kural AI aims to provide a user-friendly system that accepts text and voi
 - Database storage
 - Admin dashboard for complaint management
 
+## Supabase Setup
+
+The application stores complaints and queued submissions in Supabase. Create a Supabase project, then run [`supabase/schema.sql`](supabase/schema.sql) in the project SQL Editor.
+
+Set these environment variables for the server running Streamlit:
+
+```text
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+```
+
+Keep the service role key server-side and never expose it in browser code. Install dependencies with `pip install -r requirements.txt`, then start the existing UI with `streamlit run app.py`.
+
+The current application is Streamlit-based. Supabase can be hosted independently, but Vercel Functions do not provide the persistent Streamlit server required by this UI; deploy the Streamlit app on a Streamlit-compatible host unless the UI is separately reimplemented for Vercel.
+
 ## Voice AI Module
 
 The Voice AI module uses Python, SpeechRecognition, PyAudio, and OpenAI Whisper to capture speech and convert it into text.
@@ -74,10 +89,6 @@ The Voice AI module uses Python, SpeechRecognition, PyAudio, and OpenAI Whisper 
    ```bash
    python voice_ai.py
    ```
-
-## Project Status
-
-The Voice AI module is under development. Database integration, complaint categorization, and dashboard integration will be completed as part of the overall project.
 
 ## Team
 

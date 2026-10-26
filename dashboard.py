@@ -1,15 +1,15 @@
 
-import sqlite3
-import uuid
-
 import pandas as pd
 import streamlit as st
 
 from classifier import classify_complaint
+from database import (
+    get_all_complaints,
+    init_db,
+    save_complaint as save_to_database,
+    update_status,
+)
 from voice_ai import get_voice_complaint
-
-
-DB_NAME = "complaints.db"
 
 CATEGORIES = [
     "Garbage",
@@ -41,53 +41,27 @@ st.set_page_config(
 # ---------------- DATABASE ----------------
 
 def initialize_database():
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS complaints (
-                tracking_id TEXT PRIMARY KEY,
-                complaint_text TEXT NOT NULL,
-                location TEXT NOT NULL,
-                category TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Pending'
-            )
-        """)
+    init_db()
 
 
 def get_complaints():
-    with sqlite3.connect(DB_NAME) as conn:
-        return pd.read_sql_query(
-            "SELECT * FROM complaints ORDER BY rowid DESC",
-            conn,
-        )
+    return pd.DataFrame(get_all_complaints())
 
 
 def save_complaint(complaint_text, location):
     category = classify_complaint(complaint_text)
-    tracking_id = "MK-" + uuid.uuid4().hex[:8].upper()
-
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("""
-            INSERT INTO complaints
-            (tracking_id, complaint_text, location, category, status)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            tracking_id,
-            complaint_text,
-            location,
-            category,
-            "Pending",
-        ))
+    tracking_id, _ = save_to_database(
+        complaint_text,
+        category,
+        location,
+    )
+    update_status(tracking_id, "Pending")
 
     return tracking_id, category
 
 
 def change_status(tracking_id, new_status):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("""
-            UPDATE complaints
-            SET status = ?
-            WHERE tracking_id = ?
-        """, (new_status, tracking_id))
+    return update_status(tracking_id, new_status)
 
 
 initialize_database()
@@ -207,7 +181,7 @@ if page == "Submit Complaint":
                 st.session_state["voice_message"] = ""
                 st.rerun()
 
-            except sqlite3.Error as error:
+            except Exception as error:
                 st.error(f"Could not save complaint: {error}")
 
 
@@ -274,7 +248,7 @@ elif page == "Admin Dashboard":
                 hide_index=True,
             )
 
-    except (sqlite3.Error, KeyError) as error:
+    except Exception as error:
         st.error(f"Could not load dashboard data: {error}")
 
 
@@ -343,7 +317,7 @@ elif page == "All Complaints":
                 hide_index=True,
             )
 
-    except (sqlite3.Error, KeyError) as error:
+    except Exception as error:
         st.error(f"Could not load complaints: {error}")
 
 
@@ -394,6 +368,6 @@ elif page == "Update Status":
                 st.success("Complaint status updated successfully!")
                 st.rerun()
 
-    except (sqlite3.Error, KeyError) as error:
+    except Exception as error:
         st.error(f"Could not update status: {error}")
 

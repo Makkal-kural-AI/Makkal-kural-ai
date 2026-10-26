@@ -1,38 +1,13 @@
 
-import sqlite3
 import uuid
 from datetime import datetime
-from pathlib import Path
-from contextlib import closing
 
-from database import save_complaint, init_db
-
-BASE_DIR = Path(__file__).resolve().parent
-QUEUE_DB = BASE_DIR / "offline_queue.db"
-
-
-def get_queue_connection():
-    conn = sqlite3.connect(str(QUEUE_DB), timeout=10)
-    conn.execute("PRAGMA busy_timeout = 10000")
-    return conn
+from database import get_supabase_client, save_complaint, init_db
 
 
 def init_offline_storage():
-    """Create local storage for complaints waiting to sync."""
-
-    with closing(get_queue_connection()) as conn:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS offline_queue (
-                    local_id TEXT PRIMARY KEY,
-                    complaint_text TEXT NOT NULL,
-                    category TEXT NOT NULL DEFAULT 'Other',
-                    location TEXT NOT NULL DEFAULT 'Not provided',
-                    created_at TEXT NOT NULL,
-                    synced INTEGER NOT NULL DEFAULT 0,
-                    tracking_id TEXT UNIQUE
-                )
-            """)
+    """Check the Supabase connection; create the table with schema.sql."""
+    get_supabase_client()
 
 
 def save_offline_complaint(
@@ -56,26 +31,15 @@ def save_offline_complaint(
     local_id = str(uuid.uuid4())
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    with closing(get_queue_connection()) as conn:
-        with conn:
-            conn.execute("""
-                INSERT INTO offline_queue (
-                    local_id,
-                    complaint_text,
-                    category,
-                    location,
-                    created_at,
-                    synced,
-                    tracking_id
-                )
-                VALUES (?, ?, ?, ?, ?, 0, NULL)
-            """, (
-                local_id,
-                complaint_text,
-                category,
-                location,
-                created_at
-            ))
+    get_supabase_client().table("offline_queue").insert({
+        "local_id": local_id,
+        "complaint_text": complaint_text,
+        "category": category,
+        "location": location,
+        "created_at": created_at,
+        "synced": False,
+        "tracking_id": None,
+    }).execute()
 
     return local_id
 
@@ -85,17 +49,16 @@ def get_pending_complaints():
 
     init_offline_storage()
 
-    with closing(get_queue_connection()) as conn:
-        conn.row_factory = sqlite3.Row
-
-        rows = conn.execute("""
-            SELECT *
-            FROM offline_queue
-            WHERE synced = 0
-            ORDER BY created_at, local_id
-        """).fetchall()
-
-        return [dict(row) for row in rows]
+    return (
+        get_supabase_client()
+        .table("offline_queue")
+        .select("*")
+        .eq("synced", False)
+        .order("created_at")
+        .order("local_id")
+        .execute()
+        .data
+    )
 
 
 def sync_pending_complaints():
@@ -114,7 +77,7 @@ def sync_pending_complaints():
         local_id = complaint["local_id"]
 
         # The main database recognizes this submission by local_id.
-        tracking_id = save_complaint(
+        tracking_id, _ = save_complaint(
             complaint["complaint_text"],
             complaint["category"],
             complaint["location"],
@@ -123,16 +86,18 @@ def sync_pending_complaints():
 
         # If the program stopped before this update, a retry
         # returns the existing tracking ID from the main database.
-        with closing(get_queue_connection()) as conn:
-            with conn:
-                cursor = conn.execute("""
-                    UPDATE offline_queue
-                    SET synced = 1, tracking_id = ?
-                    WHERE local_id = ? AND synced = 0
-                """, (tracking_id, local_id))
-
-                if cursor.rowcount > 0:
-                    synced_count += 1
+        updated = (
+            get_supabase_client()
+            .table("offline_queue")
+            .update({"synced": True, "tracking_id": tracking_id})
+            .eq("local_id", local_id)
+            .eq("synced", False)
+            .select("local_id")
+            .execute()
+            .data
+        )
+        if updated:
+            synced_count += 1
 
     return synced_count
 
@@ -142,20 +107,18 @@ def get_all_offline_complaints():
 
     init_offline_storage()
 
-    with closing(get_queue_connection()) as conn:
-        conn.row_factory = sqlite3.Row
-
-        rows = conn.execute("""
-            SELECT *
-            FROM offline_queue
-            ORDER BY created_at DESC
-        """).fetchall()
-
-        return [dict(row) for row in rows]
+    return (
+        get_supabase_client()
+        .table("offline_queue")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+        .data
+    )
 
 
 if __name__ == "__main__":
     init_offline_storage()
 
-    print("Offline storage is ready!")
+    print("Supabase queue storage is ready!")
     print("Pending complaints:", len(get_pending_complaints()))

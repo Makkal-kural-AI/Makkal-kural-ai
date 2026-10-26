@@ -5,3 +5,4 @@ openai-whisper
 SpeechRecognition
 indic-transliteration
 gTTS
+supabase
