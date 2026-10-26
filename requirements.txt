@@ -6,3 +6,6 @@ SpeechRecognition
 indic-transliteration
 gTTS
 supabase
+folium
+streamlit-folium
+pygame
