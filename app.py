@@ -743,7 +743,7 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
-=======
+
 st.set_page_config(page_title='Makkal Kural AI', page_icon='📢', layout='wide', initial_sidebar_state='collapsed')
 
 if 'page' not in st.session_state:
