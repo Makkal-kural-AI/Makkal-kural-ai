@@ -844,4 +844,4 @@ else:
     if st.button('← Back to Home',key='back_home'): go('Home')
 
 st.markdown('<div class="footer">Makkal Kural AI | Your voice matters 💙</div>',unsafe_allow_html=True)
->>>>>>> bd24b37 (Updated Makkal Kural AI homepage design)
+
