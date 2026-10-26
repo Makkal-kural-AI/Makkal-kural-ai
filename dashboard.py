@@ -1,159 +1,105 @@
-"""
-dashboard.py - Makkal Kural AI complaint pages and admin tools.
 
-Two ways to use this file:
-  * Standalone:   python -m streamlit run dashboard.py
-  * From app.py:  app.py imports the render_* functions below and calls them
-                  inside its own pages (the homepage design is not touched).
-
-Public pages  : submit a complaint, track a complaint, public list + map.
-Admin pages   : dashboard, all complaints (full details), update status.
-                Everything admin-only sits behind the admin login.
-
-Admin accounts are NEVER stored in this file. Put them in the ADMIN_USERS
-environment variable (JSON) or in Streamlit secrets under [admins].
-See the setup guide for the exact format.
-
-Make a password hash:   python dashboard.py --make-hash
-"""
-
-import hashlib
-import hmac
-import html
-import json
-import os
-import sys
-import time
-
-import pandas as pd
 import streamlit as st
 
-from classifier import COMPLAINT_CATEGORIES, classify_complaint
-from database import (
-    get_all_complaints,
-    get_complaint_by_tracking_id,
-    init_db,
-    save_complaint as save_to_database,
-    update_status,
-)
 
-# Categories come from classifier.py so the two files can never disagree.
-CATEGORIES = list(COMPLAINT_CATEGORIES.keys())
-STATUSES = ["Pending", "In Progress", "Resolved"]
-STATUS_COLORS = {"Pending": "red", "In Progress": "orange", "Resolved": "green"}
-STATUS_ICONS = {"Pending": "🔴", "In Progress": "🟠", "Resolved": "🟢"}
+def render_submit(show_title=True):
+    if show_title:
+        st.title("📝 Submit Your Complaint")
 
-MAX_ADMINS = 4
-MAX_LOGIN_FAILURES = 5
-LOCKOUT_SECONDS = 60
-DATA_TTL_SECONDS = 15           # how long loaded complaints are reused
-DUPLICATE_SUBMIT_SECONDS = 30   # same complaint twice in a row = one record
-HASH_PREFIX = "pbkdf2_sha256"
-HASH_ROUNDS = 200_000
+    st.markdown("### 🎙️ Speak Your Complaint")
 
-DATA_COLUMNS = [
-    "tracking_id",
-    "complaint_text",
-    "location",
-    "category",
-    "status",
-    "submitted_at",
-    "latitude",
-    "longitude",
-]
+    # Voice transcription integration
+    # Uses the existing voice_ai.py
+    from voice_ai import transcribe_audio_bytes
 
+    audio = st.audio_input("Record your complaint")
 
-# ==========================================================================
-# Small helpers
-# ==========================================================================
-def _log(message):
-    """Log to the server console. Never pass secrets or raw exceptions."""
-    print(f"[dashboard] {message}", file=sys.stderr)
+    if audio is not None:
+        if st.button("Convert Speech to Text", key="convert_voice"):
+            with st.spinner("Transcribing audio..."):
+                try:
+                    text = transcribe_audio_bytes(audio.getvalue())
+                    if text:
+                        st.session_state["complaint_text"] = text
+                        st.success("Speech converted. Please review it.")
+                    else:
+                        st.warning("Speech not recognized. Try again.")
+                except Exception as e:
+                    st.error(f"Transcription failed: {e}")
 
-
-def _show_error(action, error):
-    """Show a friendly error without leaking connection details."""
-    if isinstance(error, (RuntimeError, ValueError)):
-        # These are our own readable messages, e.g. "Set SUPABASE_URL ...".
-        st.error(f"{action}: {error}")
-    else:
-        st.error(
-            f"{action}. Please check the database settings "
-            "(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) and try again."
+    with st.form("complaint_form"):
+        description = st.text_area(
+            "Complaint Description",
+            key="complaint_text",
         )
-    _log(f"{action} ({type(error).__name__})")
+        category = st.selectbox(
+            "Category",
+            ["Roads", "Water", "Electricity",
+             "Sanitation", "Streetlight", "Other"],
+        )
+        location = st.text_input("Location")
+
+        submitted = st.form_submit_button("Submit Complaint")
+
+    if submitted:
+        if description.strip() and location.strip():
+            st.info(
+                "Connect your existing save_complaint() function "
+                "here to save the complaint."
+            )
+        else:
+            st.error("Enter the complaint and location.")
 
 
-def _flash(kind, message):
-    """Keep a message alive across st.rerun()."""
-    st.session_state["mk_flash"] = (kind, message)
+def render_tracking(show_title=True):
+    if show_title:
+        st.title("🔎 Check Complaint Status")
+
+    tracking_id = st.text_input("Enter Tracking ID")
+
+    if st.button("Check Status", key="check_tracking"):
+        st.info(
+            "Connect your existing get_all_complaints() "
+            "function here to look up this tracking ID."
+        )
 
 
-def _show_flash():
-    item = st.session_state.pop("mk_flash", None)
-    if item:
-        kind, message = item
-        getattr(st, kind)(message)
+def render_admin(show_title=True):
+    if show_title:
+        st.title("📊 Admin Dashboard")
 
+    st.subheader("Complaint Overview")
 
-# ==========================================================================
-# Data loading (uses the existing database.py functions)
-# ==========================================================================
-@st.cache_resource(show_spinner=False)
-def _ensure_database():
-    init_db()
-    return True
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Pending", "—")
+    c2.metric("In Progress", "—")
+    c3.metric("Resolved", "—")
 
-
-@st.cache_data(ttl=DATA_TTL_SECONDS, show_spinner=False)
-def _load_rows():
-    _ensure_database()
-    return get_all_complaints()
-
-
-def refresh_data():
-    """Forget cached complaints so the next page load reads the database."""
-    _load_rows.clear()
-
-
-def _normalise(df):
-    """Make every page see the same column names, whatever the table uses."""
-    if df.empty:
-        return pd.DataFrame(columns=DATA_COLUMNS)
-
-    df = df.copy()
-
-    # The Supabase table calls the date column created_at.
-    if "submitted_at" not in df.columns:
-        df["submitted_at"] = df["created_at"] if "created_at" in df.columns else ""
-    if "complaint_text" not in df.columns:
-        df["complaint_text"] = df["description"] if "description" in df.columns else ""
-    for column in DATA_COLUMNS:
-        if column not in df.columns:
-            df[column] = None
-
-    df["complaint_text"] = df["complaint_text"].fillna("")
-    df["location"] = df["location"].fillna("Not provided")
-    df["category"] = df["category"].fillna("Other")
-    # database.py first saves new rows as "Submitted"; that means Pending.
-    df["status"] = (
-        df["status"].fillna("Pending").replace({"Submitted": "Pending", "": "Pending"})
+    st.info(
+        "Connect your existing database functions here "
+        "to display live statistics, charts and complaints."
     )
 
-    # Only keep coordinates that are real numbers in the valid range.
-    lat = pd.to_numeric(df["latitude"], errors="coerce")
-    lon = pd.to_numeric(df["longitude"], errors="coerce")
-    valid = (
-        lat.between(-90, 90)
-        & lon.between(-180, 180)
-        & ~((lat == 0) & (lon == 0))   # (0, 0) is an "empty" placeholder
+    if st.button("View All Complaints", key="dashboard_all"):
+        st.session_state["page"] = "All Complaints"
+        st.rerun()
+
+
+def render_public(show_title=True):
+    if show_title:
+        st.title("📋 All Complaints")
+
+    st.text_input("Search complaints")
+    st.selectbox(
+        "Category",
+        ["All", "Roads", "Water", "Electricity", "Other"],
     )
-    df["latitude"] = lat.where(valid)
-    df["longitude"] = lon.where(valid)
+    st.selectbox(
+        "Status",
+        ["All", "Pending", "In Progress", "Resolved"],
+    )
 
-    return df[DATA_COLUMNS].reset_index(drop=True)
-
-
-def load_complaints():
-    return _normalise(pd.DataFrame(_load_rows()))
-
+    st.info(
+        "Connect your existing database and map code here "
+        "to display complaint pins and the complaints table."
+    )
