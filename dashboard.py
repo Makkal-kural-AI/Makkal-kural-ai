@@ -313,9 +313,18 @@ def _capture_voice():
         )
 
 
-def _save_new_complaint(text, location):
+def _save_new_complaint(
+    text,
+    location,
+    name="",
+    village="",
+    district="",
+    latitude=None,
+    longitude=None,
+    category=None,
+):
     """Classify and save. The same complaint twice in a row is saved once."""
-    signature = (text, location.lower())
+    signature = (text, location.lower(), name, district, latitude, longitude)
     recent = st.session_state.get("mk_recent")
     if (
         recent
@@ -325,8 +334,17 @@ def _save_new_complaint(text, location):
         return recent["tracking_id"], recent["category"]
 
     _ensure_database()
-    category = classify_complaint(text)
-    tracking_id, _ = save_to_database(text, category, location)
+    category = category or classify_complaint(text)
+    tracking_id, _ = save_to_database(
+        text,
+        category,
+        location,
+        name=name,
+        village=village or location,
+        district=district,
+        latitude=latitude,
+        longitude=longitude,
+    )
 
     try:
         update_status(tracking_id, "Pending")
@@ -370,7 +388,41 @@ def render_submit(show_title=True):
 
     st.subheader("1. Enter your complaint")
 
-    if st.button("🎤 Speak Your Complaint", key="mk_voice_button"):
+    try:
+        from streamlit_mic_recorder import mic_recorder
+
+        recording = mic_recorder(
+            start_prompt="🎤 Speak Your Complaint",
+            stop_prompt="Stop Recording",
+            key="mk_mic_recorder",
+        )
+        if recording and recording.get("bytes"):
+            audio_bytes = recording["bytes"]
+            previous = st.session_state.get("mk_voice_audio_bytes")
+            if previous != audio_bytes:
+                st.session_state["mk_voice_audio_bytes"] = audio_bytes
+                try:
+                    from voice_ai import transcribe_audio_bytes
+                    with st.spinner("Transcribing your Tamil or English complaint..."):
+                        voice_text = transcribe_audio_bytes(audio_bytes)
+                    if voice_text:
+                        st.session_state["mk_complaint_text"] = voice_text
+                        st.session_state["mk_voice_message"] = "Voice complaint captured successfully."
+                        st.rerun()
+                    else:
+                        st.session_state["mk_voice_message"] = (
+                            "Voice was not detected. Please try again or type your complaint."
+                        )
+                except Exception as error:
+                    _log(f"voice processing failed ({type(error).__name__})")
+                    st.session_state["mk_voice_message"] = (
+                        "The speech model could not be used. Please type your complaint."
+                    )
+    except Exception as error:
+        _log(f"browser microphone unavailable ({type(error).__name__})")
+        st.info("Browser microphone is unavailable. Please type your complaint.")
+
+    if st.button("🎤 Use Server Microphone (where available)", key="mk_voice_button"):
         _capture_voice()
 
     if st.session_state["mk_voice_message"]:
@@ -389,29 +441,81 @@ def render_submit(show_title=True):
     if complaint_text.strip():
         st.success(f"Detected category: {classify_complaint(complaint_text)}")
 
-    st.subheader("2. Enter your location")
-    location = st.text_input(
+    st.subheader("2. Enter complaint details")
+    name = st.text_input("Citizen name (optional)", key="mk_citizen_name")
+
+    village = st.text_input(
         "Village / Area",
         key="mk_location",
         placeholder="Example: Kovilpatti Village",
     )
+    district = st.text_input(
+        "City / District",
+        key="mk_district",
+        placeholder="Example: Thoothukudi",
+    )
+
+    detected_category = classify_complaint(complaint_text)
+    category = st.selectbox(
+        "Complaint category",
+        CATEGORIES,
+        index=CATEGORIES.index(detected_category),
+        key="mk_category",
+    )
+
+    st.caption("Problem location")
+    latitude = st.session_state.get("mk_latitude")
+    longitude = st.session_state.get("mk_longitude")
+    try:
+        import folium
+        from streamlit_folium import st_folium
+
+        centre_lat = latitude if latitude is not None else 11.1271
+        centre_lon = longitude if longitude is not None else 78.6569
+        location_map = folium.Map(location=[centre_lat, centre_lon], zoom_start=6)
+        if latitude is not None and longitude is not None:
+            folium.Marker([latitude, longitude]).add_to(location_map)
+        selected = st_folium(
+            location_map,
+            height=360,
+            use_container_width=True,
+            key="mk_submit_map",
+        )
+        if selected and selected.get("last_clicked"):
+            clicked = selected["last_clicked"]
+            st.session_state["mk_latitude"] = float(clicked["lat"])
+            st.session_state["mk_longitude"] = float(clicked["lng"])
+            latitude = st.session_state["mk_latitude"]
+            longitude = st.session_state["mk_longitude"]
+    except Exception as error:
+        _log(f"complaint map unavailable ({type(error).__name__})")
+        st.info("Map selection is unavailable. The village and city details will still be saved.")
+
+    location = village.strip()
 
     if st.button("Submit Complaint", type="primary", key="mk_submit"):
         if not complaint_text.strip():
             st.error("Please enter or speak your complaint.")
-        elif not location.strip():
+        elif not village.strip():
             st.error("Please enter your village or location.")
         else:
             try:
-                tracking_id, category = _save_new_complaint(
-                    complaint_text.strip(), location.strip()
+                tracking_id, saved_category = _save_new_complaint(
+                    complaint_text.strip(),
+                    location,
+                    name=name.strip(),
+                    village=village.strip(),
+                    district=district.strip(),
+                    latitude=latitude,
+                    longitude=longitude,
+                    category=category,
                 )
             except Exception as error:
                 _show_error("Could not save your complaint", error)
             else:
                 st.session_state["mk_last_saved"] = {
                     "tracking_id": tracking_id,
-                    "category": category,
+                    "category": saved_category,
                 }
                 st.session_state["mk_voice_message"] = ""
                 st.rerun()
@@ -756,8 +860,6 @@ def render_admin(show_title=True):
 # Standalone app (python -m streamlit run dashboard.py)
 # ==========================================================================
 def main():
-    st.set_page_config(page_title="Makkal Kural AI", page_icon="📢", layout="wide")
-
     st.sidebar.title("📢 Makkal Kural AI")
     st.sidebar.caption("Public Complaint Management")
 

@@ -1,5 +1,6 @@
 
 import os
+import tempfile
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
@@ -132,6 +133,53 @@ def capture_and_process_complaint(model):
 
 
 _model = None
+
+
+def transcribe_audio_bytes(audio_bytes):
+    """Transcribe browser-recorded WAV audio with the shared Whisper model."""
+    global _model
+
+    if not audio_bytes:
+        return None
+
+    if _model is None:
+        _model = whisper.load_model("small")
+
+    suffix = ".wav"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as audio_file:
+            audio_file.write(audio_bytes)
+            temp_path = audio_file.name
+
+        result = _model.transcribe(
+            temp_path,
+            task="transcribe",
+            fp16=False,
+            temperature=0,
+            condition_on_previous_text=False,
+        )
+        text = str(result.get("text", "")).strip()
+        language = result.get("language", "unknown")
+        if language not in ("ta", "en") or len(text) < 3:
+            return None
+
+        if language == "ta":
+            translated = _model.transcribe(
+                temp_path,
+                task="translate",
+                fp16=False,
+                temperature=0,
+                condition_on_previous_text=False,
+            )
+            return str(translated.get("text", "")).strip() or text
+        return text
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 def get_voice_complaint():

@@ -1,11 +1,12 @@
 
-streamlit
+streamlit>=1.40
+pandas
 streamlit-mic-recorder
 openai-whisper
 SpeechRecognition
-indic-transliteration
+PyAudio
 gTTS
-supabase
+supabase>=2.0.0,<3
 folium
 streamlit-folium
 pygame
