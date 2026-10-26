@@ -4,9 +4,9 @@ WORKDIR /app
 
 RUN apt-get update 
     && apt-get install -y --no-install-recommends 
-       ffmpeg 
-       portaudio19-dev 
-       build-essential 
+        ffmpeg 
+        portaudio19-dev 
+        build-essential 
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
