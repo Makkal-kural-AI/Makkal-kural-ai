@@ -6,7 +6,7 @@ import whisper
 import os
 import hashlib
 
-<<<<<<< HEAD
+
 st.set_page_config(
     page_title="Makkal Kural AI",
     page_icon="📢",
