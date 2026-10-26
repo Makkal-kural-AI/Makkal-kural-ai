@@ -1,5 +1,11 @@
-
 import streamlit as st
+
+from dashboard import (
+    render_admin,
+    render_public,
+    render_submit,
+    render_tracking,
+)
 
 st.set_page_config(
     page_title="Makkal Kural AI",
@@ -289,31 +295,16 @@ else:
     )
 
     if st.session_state.page == "Submit Your Complaint":
-        st.info(
-            "Connect this page to your existing complaint form."
-        )
+        render_submit(show_title=False)
 
     elif st.session_state.page == "Admin Dashboard":
-        st.info(
-            "Administrator login and complaint management "
-            "will be connected here."
-        )
+        render_admin(show_title=False)
 
     elif st.session_state.page == "All Complaints":
-        st.info(
-            "Connect this page to your complaints database."
-        )
+        render_public(show_title=False)
 
-    elif st.session_state.page == "Tracking":
-        st.info(
-            "Connect this page to your tracking functionality."
-        )
-
-    elif st.session_state.page == "Status":
-        st.info(
-            "Enter a Tracking ID after connecting your "
-            "existing complaint tracking page."
-        )
+    elif st.session_state.page in ("Tracking", "Status"):
+        render_tracking(show_title=False)
 
     elif st.session_state.page == "About":
         st.write(
@@ -332,4 +323,3 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True
 )
-
