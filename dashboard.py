@@ -1,128 +1,159 @@
-    options = df
-    if query:
-        options = df[
-            df["tracking_id"].astype(str).str.contains(query, case=False, na=False, regex=False)
-            | df["location"].astype(str).str.contains(query, case=False, na=False, regex=False)
-        ]
-    if options.empty:
-        st.warning("No complaint matches that search.")
-        return
+"""
+dashboard.py - Makkal Kural AI complaint pages and admin tools.
 
-    tracking_id = st.selectbox(
-        "Select complaint tracking ID", options["tracking_id"].tolist(), key="mk_upd_id"
-    )
-    complaint = df[df["tracking_id"] == tracking_id].iloc[0]
+Two ways to use this file:
+  * Standalone:   python -m streamlit run dashboard.py
+  * From app.py:  app.py imports the render_* functions below and calls them
+                  inside its own pages (the homepage design is not touched).
 
-    st.subheader("Complaint Details")
-    st.write(f"**Complaint:** {complaint['complaint_text']}")
-    st.write(f"**Location:** {complaint['location']}")
-    st.write(f"**Category:** {complaint['category']}")
-    st.write(f"**Submitted:** {complaint['submitted_at']}")
-    st.write(f"**Current status:** {complaint['status']}")
+Public pages  : submit a complaint, track a complaint, public list + map.
+Admin pages   : dashboard, all complaints (full details), update status.
+                Everything admin-only sits behind the admin login.
 
-    current = complaint["status"]
-    new_status = st.selectbox(
-        "Choose new status",
-        STATUSES,
-        index=STATUSES.index(current) if current in STATUSES else 0,
-        key=f"mk_upd_status_{tracking_id}",
-    )
+Admin accounts are NEVER stored in this file. Put them in the ADMIN_USERS
+environment variable (JSON) or in Streamlit secrets under [admins].
+See the setup guide for the exact format.
 
-    if st.button("Save Status", type="primary", key="mk_save_status"):
-        if not _is_admin():  # check again right before changing data
-            st.error("Please log in as an admin first.")
-            return
-        try:
-            updated = update_status(tracking_id, new_status)
-        except Exception as error:
-            _show_error("Could not update the status", error)
-            return
-        if updated:
-            refresh_data()
-            _flash("success", f"Status of {tracking_id} changed to {new_status}.")
-            st.rerun()
-        else:
-            st.error("No complaint was updated. Please check the tracking ID.")
+Make a password hash:   python dashboard.py --make-hash
+"""
 
+import hashlib
+import hmac
+import html
+import json
+import os
+import sys
+import time
 
-def _admin_page(title, show_title, body):
-    """Shared wrapper: title, login gate, data loading, error handling."""
-    if show_title:
-        st.title(title)
-    if not _require_admin():
-        return
-    _admin_bar()
-    _show_flash()
-    try:
-        df = load_complaints()
-    except Exception as error:
-        _show_error("Could not load complaints", error)
-        return
-    body(df)
+import pandas as pd
+import streamlit as st
 
+from classifier import COMPLAINT_CATEGORIES, classify_complaint
+from database import (
+    get_all_complaints,
+    get_complaint_by_tracking_id,
+    init_db,
+    save_complaint as save_to_database,
+    update_status,
+)
 
-def render_admin_dashboard(show_title=True):
-    _admin_page("📊 Admin Dashboard", show_title, _admin_overview)
+# Categories come from classifier.py so the two files can never disagree.
+CATEGORIES = list(COMPLAINT_CATEGORIES.keys())
+STATUSES = ["Pending", "In Progress", "Resolved"]
+STATUS_COLORS = {"Pending": "red", "In Progress": "orange", "Resolved": "green"}
+STATUS_ICONS = {"Pending": "🔴", "In Progress": "🟠", "Resolved": "🟢"}
 
+MAX_ADMINS = 4
+MAX_LOGIN_FAILURES = 5
+LOCKOUT_SECONDS = 60
+DATA_TTL_SECONDS = 15           # how long loaded complaints are reused
+DUPLICATE_SUBMIT_SECONDS = 30   # same complaint twice in a row = one record
+HASH_PREFIX = "pbkdf2_sha256"
+HASH_ROUNDS = 200_000
 
-def render_admin_complaints(show_title=True):
-    _admin_page("📋 All Complaints (Admin)", show_title, _admin_complaints)
-
-
-def render_admin_update_status(show_title=True):
-    _admin_page("🔄 Update Complaint Status", show_title, _admin_update)
-
-
-def render_admin(show_title=True):
-    """All admin tools on one page (used by app.py's Admin Dashboard page)."""
-
-    def body(df):
-        overview, complaints, update, admin_map = st.tabs(
-            ["Overview", "All Complaints", "Update Status", "Map"]
-        )
-        with overview:
-            _admin_overview(df)
-        with complaints:
-            _admin_complaints(df)
-        with update:
-            _admin_update(df)
-        with admin_map:
-            _render_map(df)
-
-    _admin_page("🛡️ Admin Dashboard", show_title, body)
+DATA_COLUMNS = [
+    "tracking_id",
+    "complaint_text",
+    "location",
+    "category",
+    "status",
+    "submitted_at",
+    "latitude",
+    "longitude",
+]
 
 
 # ==========================================================================
-# Standalone app (python -m streamlit run dashboard.py)
+# Small helpers
 # ==========================================================================
-def main():
-    st.sidebar.title("📢 Makkal Kural AI")
-    st.sidebar.caption("Public Complaint Management")
-
-    pages = {
-        "Submit Complaint": render_submit,
-        "Track Complaint": render_tracking,
-        "Public Complaints & Map": render_public,
-        "Admin Dashboard": render_admin_dashboard,
-        "All Complaints": render_admin_complaints,
-        "Update Status": render_admin_update_status,
-    }
-    page = st.sidebar.radio("Navigation", list(pages))
-
-    st.sidebar.divider()
-    st.sidebar.caption("Helping communities report local problems.")
-
-    pages[page]()
+def _log(message):
+    """Log to the server console. Never pass secrets or raw exceptions."""
+    print(f"[dashboard] {message}", file=sys.stderr)
 
 
-if __name__ == "__main__":
-    if sys.argv[1:2] == ["--make-hash"]:
-        import getpass
-
-        chosen = getpass.getpass("Type the new admin password: ")
-        if not chosen:
-            sys.exit("Password cannot be empty.")
-        print("Copy this value into ADMIN_USERS:")
-        print(make_password_hash(chosen))
+def _show_error(action, error):
+    """Show a friendly error without leaking connection details."""
+    if isinstance(error, (RuntimeError, ValueError)):
+        # These are our own readable messages, e.g. "Set SUPABASE_URL ...".
+        st.error(f"{action}: {error}")
     else:
-        main()
+        st.error(
+            f"{action}. Please check the database settings "
+            "(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) and try again."
+        )
+    _log(f"{action} ({type(error).__name__})")
+
+
+def _flash(kind, message):
+    """Keep a message alive across st.rerun()."""
+    st.session_state["mk_flash"] = (kind, message)
+
+
+def _show_flash():
+    item = st.session_state.pop("mk_flash", None)
+    if item:
+        kind, message = item
+        getattr(st, kind)(message)
+
+
+# ==========================================================================
+# Data loading (uses the existing database.py functions)
+# ==========================================================================
+@st.cache_resource(show_spinner=False)
+def _ensure_database():
+    init_db()
+    return True
+
+
+@st.cache_data(ttl=DATA_TTL_SECONDS, show_spinner=False)
+def _load_rows():
+    _ensure_database()
+    return get_all_complaints()
+
+
+def refresh_data():
+    """Forget cached complaints so the next page load reads the database."""
+    _load_rows.clear()
+
+
+def _normalise(df):
+    """Make every page see the same column names, whatever the table uses."""
+    if df.empty:
+        return pd.DataFrame(columns=DATA_COLUMNS)
+
+    df = df.copy()
+
+    # The Supabase table calls the date column created_at.
+    if "submitted_at" not in df.columns:
+        df["submitted_at"] = df["created_at"] if "created_at" in df.columns else ""
+    if "complaint_text" not in df.columns:
+        df["complaint_text"] = df["description"] if "description" in df.columns else ""
+    for column in DATA_COLUMNS:
+        if column not in df.columns:
+            df[column] = None
+
+    df["complaint_text"] = df["complaint_text"].fillna("")
+    df["location"] = df["location"].fillna("Not provided")
+    df["category"] = df["category"].fillna("Other")
+    # database.py first saves new rows as "Submitted"; that means Pending.
+    df["status"] = (
+        df["status"].fillna("Pending").replace({"Submitted": "Pending", "": "Pending"})
+    )
+
+    # Only keep coordinates that are real numbers in the valid range.
+    lat = pd.to_numeric(df["latitude"], errors="coerce")
+    lon = pd.to_numeric(df["longitude"], errors="coerce")
+    valid = (
+        lat.between(-90, 90)
+        & lon.between(-180, 180)
+        & ~((lat == 0) & (lon == 0))   # (0, 0) is an "empty" placeholder
+    )
+    df["latitude"] = lat.where(valid)
+    df["longitude"] = lon.where(valid)
+
+    return df[DATA_COLUMNS].reset_index(drop=True)
+
+
+def load_complaints():
+    return _normalise(pd.DataFrame(_load_rows()))
+
