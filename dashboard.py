@@ -12,7 +12,8 @@ import streamlit as st
 from database import get_all_complaints, save_complaint, update_status
 
 try:
-    from voice_ai import transcribe_audio_bytes
+    import hashlib
+    from voice_ai import process_complaint_audio, confirmation_audio
 except ImportError:
     transcribe_audio_bytes = None
 
@@ -245,7 +246,29 @@ def render_submit(show_title=True):
 
         st.markdown("**Complaint Description**")
 
-        audio = st.audio_input("🎙️ Speak your complaint (optional)")
+       audio = st.audio_input("🎙️ Speak Your Complaint")
+
+if audio is not None:
+    audio_bytes = audio.getvalue()
+    audio_id = hashlib.sha256(audio_bytes).hexdigest()
+
+    if st.session_state.get("processed_voice_id") != audio_id:
+        try:
+            with st.spinner("Recognizing and translating your voice..."):
+                result = process_complaint_audio(audio_bytes)
+
+            if result:
+                st.session_state["complaint_description"] = result["english"]
+                st.session_state["voice_language"] = result["language"]
+                st.session_state["processed_voice_id"] = audio_id
+
+                st.success("Voice converted successfully!")
+                st.rerun()
+            else:
+                st.warning("Could not recognize speech. Please try again.")
+
+        except Exception as exc:
+            st.error(f"Voice processing failed: {exc}")
 
         if audio is not None:
             if st.button("Convert Voice to Text", key="transcribe_voice"):
@@ -269,13 +292,12 @@ def render_submit(show_title=True):
                     except Exception as exc:
                         st.error(f"Voice transcription failed: {exc}")
 
-        description = st.text_area(
-            "Type your complaint here...",
-            value=st.session_state.get("voice_complaint_text", ""),
-            height=140,
-            key="complaint_description",
-            placeholder="Describe the issue you are facing...",
-        )
+       description = st.text_area(
+    "Type your complaint here...",
+    height=140,
+    key="complaint_description",
+    placeholder="Describe the issue you are facing...",
+)
 
         categories = [
             "Roads & Infrastructure",
@@ -367,8 +389,18 @@ def render_submit(show_title=True):
                         longitude,
                     )
 
-                st.success("Complaint submitted successfully!")
+               language = st.session_state.pop("processed_voice_id", None)
 
+try:
+    audio_bytes = confirmation_audio(language)
+
+    st.audio(
+        audio_bytes,
+        format="audio/mp3",
+        autoplay=True,
+    )
+except Exception:
+    st.warning("Complaint saved, but audio confirmation is unavailable.")
                 if isinstance(result, dict):
                     tracking_id = result.get("tracking_id")
                 else:
