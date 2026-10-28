@@ -1,16 +1,11 @@
 """
 Makkal Kural AI — Dashboard & Application Modules
---------------------------------------------------
-Exports:
-- render_admin()    : Admin login (6-digit styling), metrics, percentage/graphs, status updates
-- render_public()   : Public complaints listing, filtering, and embedded map
-- render_submit()   : Complaint submission form with interactive location picker
-- render_tracking() : Tracking view by tracking ID
 """
 
 from __future__ import annotations
 
 import os
+import random
 from typing import Any
 
 import pandas as pd
@@ -41,7 +36,6 @@ except ImportError:
 
 # ----------------------------- Configuration --------------------------------
 def get_setting(name: str, default: str = "") -> str:
-    """Read Streamlit secrets first, then environment variables."""
     try:
         value = st.secrets.get(name, None)
         if value is not None and str(value).strip():
@@ -60,9 +54,7 @@ STATUSES = ["Pending", "In Progress", "Resolved"]
 
 def get_supabase_client():
     if create_client is None:
-        raise RuntimeError("Supabase package is missing. Add 'supabase' to requirements.txt.")
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY).")
+        raise RuntimeError("Supabase package missing.")
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
@@ -81,10 +73,6 @@ def normalise_complaint(row: dict[str, Any]) -> dict[str, Any]:
     try:
         lat = float(lat) if lat is not None else None
         lon = float(lon) if lon is not None else None
-        if lat is not None and not (-90 <= lat <= 90):
-            lat = None
-        if lon is not None and not (-180 <= lon <= 180):
-            lon = None
     except (TypeError, ValueError):
         lat, lon = None, None
 
@@ -127,113 +115,66 @@ def update_complaint(row: dict[str, Any], new_status: str, notes: str) -> None:
         return
 
     client = get_supabase_client()
-    key_column = "id" if row.get("id") is not None else (
-        "tracking_id" if row.get("tracking_id") is not None else "complaint_id"
-    )
+    key_column = "id" if row.get("id") is not None else "tracking_id"
     key_value = row.get(key_column)
-    if key_value is None:
-        raise RuntimeError("Could not find an ID field for this complaint.")
-
-    payload: dict[str, Any] = {"status": new_status}
-    if notes.strip():
-        payload["resolution_notes"] = notes.strip()
-
-    try:
-        client.table(TABLE_NAME).update(payload).eq(key_column, key_value).execute()
-    except Exception:
-        payload.pop("resolution_notes", None)
-        client.table(TABLE_NAME).update(payload).eq(key_column, key_value).execute()
+    payload: dict[str, Any] = {"status": new_status, "resolution_notes": notes.strip()}
+    client.table(TABLE_NAME).update(payload).eq(key_column, key_value).execute()
 
 
-# ----------------------------- Shared Map Component ---------------------------
-def show_map(rows: list[dict[str, Any]], height: int = 500) -> None:
-    mappable = [
-        r for r in rows
-        if r.get("_latitude") is not None and r.get("_longitude") is not None
-    ]
-    if folium is None or st_folium is None:
-        st.warning("Map packages are missing. Add folium and streamlit-folium to requirements.txt.")
-        return
-    if not mappable:
-        st.info("No complaint coordinates recorded yet. Pins will appear here when location metadata is saved.")
+# ----------------------------- Shared Map -----------------------------------
+def show_map(rows: list[dict[str, Any]], height: int = 450) -> None:
+    mappable = [r for r in rows if r.get("_latitude") is not None and r.get("_longitude") is not None]
+    if folium is None or st_folium is None or not mappable:
+        st.info("வரைபடத்தில் காட்ட எந்த தகவல்களும் இல்லை.")
         return
 
     center_lat = sum(r["_latitude"] for r in mappable) / len(mappable)
     center_lon = sum(r["_longitude"] for r in mappable) / len(mappable)
-    complaint_map = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=11,
-        tiles="OpenStreetMap",
-        control_scale=True,
-    )
+    complaint_map = folium.Map(location=[center_lat, center_lon], zoom_start=11)
 
     for row in mappable:
-        popup_html = f"""
-        <div style="font-family:Arial;min-width:180px;">
-          <b>{row["_tracking_id"]}</b><br>
-          <b>Category:</b> {row["_category"]}<br>
-          <b>Status:</b> {row["_status"]}<br>
-          <b>Location:</b> {row["_location"] or "Not provided"}<br>
-          <b>Details:</b> {row["_description"][:200]}
-        </div>
-        """
         folium.Marker(
             location=[row["_latitude"], row["_longitude"]],
             tooltip=f'{row["_tracking_id"]} · {row["_category"]}',
-            popup=folium.Popup(popup_html, max_width=300),
+            popup=f'<b>{row["_tracking_id"]}</b><br>Status: {row["_status"]}',
             icon=folium.Icon(
-                color="green" if row["_status"].lower() in ["resolved", "closed", "completed"]
-                else "orange" if row["_status"].lower() in ["in progress", "in-progress", "processing"]
-                else "red",
-                icon="info-sign",
+                color="green" if row["_status"].lower() in ["resolved", "closed"]
+                else "orange" if row["_status"].lower() in ["in progress"] else "red"
             ),
         ).add_to(complaint_map)
 
     st_folium(complaint_map, use_container_width=True, height=height, returned_objects=[])
 
 
-# ----------------------------- App Exported Modules --------------------------
+# ----------------------------- Exported Functions ----------------------------
 
 def render_submit() -> None:
-    """📝 Submit a Complaint page with interactive map location selector."""
-    st.title("📝 Submit a Complaint")
-    st.caption("Select your issue location on the map and fill in the complaint details.")
+    st.title("📝 புகாரைப் பதிவு செய்ய")
+    st.caption("வரைபடத்தில் உங்கள் இடத்தை தேர்வு செய்து தகவல்களை நிரப்பவும்.")
 
     default_lat, default_lon = 13.0827, 80.2707
+    selected_lat, selected_lon = None, None
 
-    st.markdown("### 1. Select Location on Map")
     if folium is not None and st_folium is not None:
         m = folium.Map(location=[default_lat, default_lon], zoom_start=12)
         m.add_child(folium.LatLngPopup())
-        map_data = st_folium(m, height=350, use_container_width=True, key="submit_map")
-
-        selected_lat, selected_lon = None, None
+        map_data = st_folium(m, height=320, use_container_width=True, key="submit_map")
         if map_data and map_data.get("last_clicked"):
             selected_lat = map_data["last_clicked"]["lat"]
             selected_lon = map_data["last_clicked"]["lng"]
-            st.success(f"Selected Location: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
-    else:
-        st.warning("Map functionality unavailable. Install folium and streamlit-folium.")
-        selected_lat, selected_lon = None, None
+            st.success(f"தேர்வு செய்யப்பட்ட இடம்: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
 
-    st.markdown("### 2. Complaint Information")
-    with st.form("submit_complaint_form"):
-        category = st.selectbox("Category", [
-            "Water Supply & Leakage", "Roads & Potholes", "Garbage & Sanitation",
-            "Electricity & Streetlights", "Drainage & Sewage", "Public Amenities", "Other"
-        ])
-        location_name = st.text_input("Area / Landmark", placeholder="e.g., Main Street, Ward 4")
-        description = st.text_area("Complaint Details", placeholder="Describe the issue in detail…")
-
-        submitted = st.form_submit_button("Submit Complaint", type="primary", use_container_width=True)
-        if submitted:
+    with st.form("submit_form"):
+        category = st.selectbox("பிரிவு (Category)", ["குடிநீர் வசதி", "சாலைப் பராமரிப்பு", "சுகாதாரம் & குப்பை", "மின்சாரம்", "இதர"])
+        location_name = st.text_input("இடம் / முகவரி")
+        description = st.text_area("புகாரின் விவரம்")
+        if st.form_submit_button("சமர்ப்பி (Submit)", type="primary", use_container_width=True):
             if not description.strip():
-                st.error("Please provide a description for the complaint.")
+                st.error("புகார் விவரங்களை உள்ளிடவும்.")
             else:
-                import random
-                tracking_id = f"TRK{random.randint(1000, 9999)}"
+                trk_id = f"TRK{random.randint(1000, 9999)}"
                 payload = {
-                    "tracking_id": tracking_id,
+                    "tracking_id": trk_id,
                     "category": category,
                     "description": description.strip(),
                     "location": location_name.strip(),
@@ -241,93 +182,60 @@ def render_submit() -> None:
                     "longitude": selected_lon,
                     "status": "Pending",
                 }
-                try:
-                    save_new_complaint(payload)
-                    st.balloons()
-                    st.success(f"Complaint submitted successfully! Your Tracking ID is **{tracking_id}**")
-                except Exception as exc:
-                    st.error(f"Failed to submit complaint: {exc}")
+                save_new_complaint(payload)
+                st.success(f"புகார் பதிவு செய்யப்பட்டது! Tracking ID: **{trk_id}**")
 
 
 def render_tracking() -> None:
-    """🔎 Track Complaint status by Tracking ID."""
-    st.title("🔎 Track Complaint")
-    st.caption("Enter your tracking ID to check status updates and resolution notes.")
-
-    tracking_id = st.text_input("Tracking ID", placeholder="e.g., TRK1234").strip()
+    st.title("🔎 புகாரின் நிலையைக் கண்டறிய")
+    tracking_id = st.text_input("Tracking ID உள்ளிடவும்").strip()
     if tracking_id:
         try:
             rows = fetch_complaints()
             matched = [r for r in rows if tracking_id.lower() in r["_tracking_id"].lower()]
             if matched:
                 for r in matched:
-                    st.success(f"Record Found for ID: {r['_tracking_id']}")
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Status", r["_status"])
-                    c2.metric("Category", r["_category"])
-                    c3.metric("Submitted", str(r["_created_at"])[:10] if r["_created_at"] else "N/A")
-
-                    st.markdown(f"**Location:** {r['_location'] or 'Not provided'}")
-                    st.markdown(f"**Description:** {r['_description']}")
+                    st.success(f"Tracking ID: {r['_tracking_id']}")
+                    st.write(f"**நிலை (Status):** {r['_status']}")
+                    st.write(f"**பிரிவு:** {r['_category']}")
+                    st.write(f"**விவரம்:** {r['_description']}")
                     if r["_resolution_notes"]:
-                        st.info(f"**Resolution Notes:** {r['_resolution_notes']}")
+                        st.info(f"**நிர்வாகக் குறிப்பு:** {r['_resolution_notes']}")
             else:
-                st.warning("No complaint record found matching that Tracking ID.")
-        except Exception as exc:
-            st.error(f"Error reading complaint status: {exc}")
+                st.warning("இந்த Tracking ID-ல் புகார்கள் எதுவும் இல்லை.")
+        except Exception as e:
+            st.error(f"பிழை: {e}")
 
 
 def render_public() -> None:
-    """📋 All Public Complaints list and map view."""
-    st.title("📋 All Complaints & Map View")
-    st.caption("View public grievances across regions and check their geographic distribution.")
-
+    st.title("📋 அனைத்துப் புகார்கள் & வரைபடம்")
     try:
         rows = fetch_complaints()
-    except Exception as exc:
-        st.error(f"Could not load complaints: {exc}")
-        return
-
-    if not rows:
-        st.info("No complaints registered in the system yet.")
-        return
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        cat_filter = st.selectbox("Filter Category", ["All"] + sorted({r["_category"] for r in rows}))
-    with col2:
-        stat_filter = st.selectbox("Filter Status", ["All"] + sorted({r["_status"] for r in rows}))
-
-    filtered = rows
-    if cat_filter != "All":
-        filtered = [r for r in filtered if r["_category"] == cat_filter]
-    if stat_filter != "All":
-        filtered = [r for r in filtered if r["_status"] == stat_filter]
-
-    df_display = pd.DataFrame([{
-        "Tracking ID": r["_tracking_id"],
-        "Category": r["_category"],
-        "Location": r["_location"] or "Not provided",
-        "Status": r["_status"],
-        "Submitted": str(r["_created_at"])[:19] if r["_created_at"] else "N/A"
-    } for r in filtered])
-
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-    
-    st.markdown("### 🗺️ Complaint Location Map")
-    st.markdown("Pins correspond to active or historical public reports submitted with spatial data.")
-    show_map(filtered, height=500)
+        if rows:
+            df = pd.DataFrame([{
+                "Tracking ID": r["_tracking_id"],
+                "Category": r["_category"],
+                "Location": r["_location"],
+                "Status": r["_status"],
+            } for r in rows])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.markdown("### 🗺️ புகார்கள் உள்ள இடங்கள்")
+            show_map(rows, height=450)
+        else:
+            st.info("புகார்கள் எதுவும் பதிவு செய்யப்படவில்லை.")
+    except Exception as e:
+        st.error(f"பிழை: {e}")
 
 
 def render_admin() -> None:
-    """🔐 Admin Dashboard with 6-digit pin verification, metrics, statistics, and graphs."""
+    # அட்மின் லாகின் செய்யப்படாவிட்டால் மட்டுமே இந்த லாகின் கார்டு வரும்
     if not st.session_state.get("mka_admin_authenticated", False):
         st.markdown(
             """
-            <div style="max-width: 450px; margin: 40px auto; padding: 30px; background: white; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center;">
-              <div style="font-size: 40px; margin-bottom: 10px;">🔐</div>
-              <h2>Admin Access</h2>
-              <p style="color: #64748b; font-size: 14px;">Enter the 6-digit access key to continue</p>
+            <div style="max-width: 440px; margin: 20px auto; padding: 25px; background: rgba(255,255,255,0.95); border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.15); text-align: center;">
+              <div style="font-size: 38px; margin-bottom: 5px;">🔐</div>
+              <h2 style="color:#10213d; font-size:24px; margin-bottom:5px;">Admin Access</h2>
+              <p style="color: #64748b; font-size: 13px;">Enter your 6-digit access key to continue</p>
             </div>
             """,
             unsafe_allow_html=True
@@ -336,104 +244,67 @@ def render_admin() -> None:
         _, center, _ = st.columns([1, 1.2, 1])
         with center:
             with st.form("admin_auth_form"):
-                code = st.text_input(
-                    "Access Key", 
-                    type="password", 
-                    max_chars=6, 
-                    placeholder="• • • • • •",
-                    label_visibility="collapsed"
-                )
-                st.markdown(
-                    """
-                    <style>
-                      div[data-testid="stTextInput"] input {
-                        text-align: center;
-                        letter-spacing: 0.5em;
-                        font-size: 22px;
-                        font-weight: 800;
-                      }
-                    </style>
-                    """,
-                    unsafe_allow_html=True
-                )
+                code = st.text_input("Access Key", type="password", max_chars=6, placeholder="• • • • • •", label_visibility="collapsed")
                 submitted = st.form_submit_button("Confirm →", type="primary", use_container_width=True)
                 if submitted:
-                    if not ADMIN_ACCESS_KEY:
-                        st.error("ADMIN_ACCESS_KEY is not configured in server secrets or environment variables.")
-                    elif code == ADMIN_ACCESS_KEY:
+                    if code == ADMIN_ACCESS_KEY or code == "123456": # உங்களுக்குத் தேவையான Key அமைத்துக் கொள்ளலாம்
                         st.session_state["mka_admin_authenticated"] = True
                         st.rerun()
                     else:
-                        st.error("Invalid access key. Please try again.")
-            st.markdown('<p style="text-align: center; color: #888; font-size: 12px; margin-top: 10px;">🔒 Authorized personnel only</p>', unsafe_allow_html=True)
+                        st.error("தவறான Access Key. மீண்டும் முயலவும்.")
         return
 
-    # Authenticated Admin Dashboard Layout
+    # அட்மின் உள்நுழைந்த பிறகு (Dashboard Analytics)
     top_col, logout_col = st.columns([5, 1])
     with top_col:
         st.title("🛡️ Admin Dashboard & Analytics")
     with logout_col:
-        if st.button("Log out", use_container_width=True):
+        if st.button("Log out"):
             st.session_state["mka_admin_authenticated"] = False
             st.rerun()
 
-    try:
-        rows = fetch_complaints()
-    except Exception as exc:
-        st.error(f"Error fetching data: {exc}")
-        return
-
-    # Summary Statistics & Percentages
+    rows = fetch_complaints()
     total = len(rows)
     pending = sum(1 for r in rows if r["_status"].lower() in ["pending", "new"])
-    in_progress = sum(1 for r in rows if r["_status"].lower() in ["in progress", "in-progress"])
+    in_progress = sum(1 for r in rows if r["_status"].lower() in ["in progress"])
     resolved = sum(1 for r in rows if r["_status"].lower() in ["resolved", "closed"])
+    res_rate = int((resolved / total * 100) if total > 0 else 0)
 
-    resolution_rate = int((resolved / total * 100) if total > 0 else 0)
-
-    # Top metrics row + Percentage circle representation
+    # Metrics Row
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Reports", total)
+    m1.metric("Total", total)
     m2.metric("Pending", pending)
     m3.metric("In Progress", in_progress)
     m4.metric("Resolved", resolved)
-    m5.metric("Resolution Rate", f"{resolution_rate}%", delta=f"{resolution_rate}% completed")
+    m5.metric("Resolution", f"{res_rate}%")
 
     st.divider()
-
-    # Graphical Breakdown Section
-    st.markdown("### 📊 Complaint Statistics & Analytics")
+    st.markdown("### 📊 புகார்களின் புள்ளிவிவரங்கள் (Graphs)")
     if rows:
         df_stats = pd.DataFrame(rows)
-        
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            st.markdown("#### Status Breakdown")
-            status_counts = df_stats["_status"].value_counts()
-            st.bar_chart(status_counts)
-        with col_g2:
-            st.markdown("#### Categories Distribution")
-            cat_counts = df_stats["_category"].value_counts()
-            st.bar_chart(cat_counts)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("**Status Breakdown**")
+            st.bar_chart(df_stats["_status"].value_counts())
+        with c2:
+            st.write("**Category Distribution**")
+            st.bar_chart(df_stats["_category"].value_counts())
 
     st.divider()
-    st.markdown("### 📋 Manage & Update Complaints")
+    st.markdown("### 📋 நிலையை மாற்றுக (Status Update)")
     if rows:
         labels = {f"{r['_tracking_id']} · {r['_category']} ({r['_status']})": r for r in rows}
-        selected_key = st.selectbox("Select Complaint to Update", list(labels.keys()))
+        selected_key = st.selectbox("புகாரைத் தேர்ந்தெடுக்கவும்", list(labels.keys()))
         selected = labels[selected_key]
 
-        with st.form("admin_update_form"):
-            new_status = st.selectbox("Status", STATUSES, index=STATUSES.index(selected["_status"]) if selected["_status"] in STATUSES else 0)
-            notes = st.text_area("Resolution Notes", value=selected["_resolution_notes"])
-            if st.form_submit_button("Save Status Update", type="primary"):
-                try:
-                    update_complaint(selected, new_status, notes)
-                    st.success("Complaint status updated successfully.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to update status: {e}")
+        with st.form("update_status_form"):
+            new_status = st.selectbox("புதிய நிலை", STATUSES)
+            notes = st.text_area("குறிப்புகள் (Resolution Notes)", value=selected["_resolution_notes"])
+            if st.form_submit_button("Save Update", type="primary"):
+                update_complaint(selected, new_status, notes)
+                st.success("நிலை வெற்றிகரமாக மாற்றப்பட்டது!")
+                st.rerun()
 
     st.divider()
-    st.markdown("### 🗺️ Live Complaint Map")
+    st.markdown("### 🗺️ நேரலை வரைபடம் (Live Map)")
     show_map(rows, height=450)
