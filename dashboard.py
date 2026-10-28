@@ -1,259 +1,512 @@
-"""Makkal Kural AI pages: complaint submission, tracking, public list, admin analytics."""
-import hmac, os
+"""
+Makkal Kural AI — Admin Dashboard
+---------------------------------
+Features:
+- Styled admin login using ADMIN_ACCESS_KEY from environment / Streamlit secrets
+- All Complaints table with search and filters
+- Interactive Folium map with complaint pins
+- Status updates and optional resolution notes
+- Summary metrics
+
+Expected Supabase table by default: "complaints"
+Common expected columns: tracking_id, category, description, status, created_at,
+latitude, longitude, location, resolution_notes
+
+If your database.py already contains database helpers, you can replace the
+Supabase functions below with calls to those helpers. The exact project ZIP
+was not available while this file was prepared, so verify table/column names
+against your existing schema before deploying.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from typing import Any
+
 import pandas as pd
 import streamlit as st
-from database import get_all_complaints, get_complaint, save_complaint, update_status
-from classifier import classify_complaint
 
-BG = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1920&q=85"
-STATUSES = ["Submitted", "Pending", "In Progress", "Resolved", "Rejected"]
+try:
+    import folium
+    from streamlit_folium import st_folium
+except ImportError:
+    folium = None
+    st_folium = None
 
-def apply_app_style():
-    st.markdown(f"""<style>
-    .stApp {{background:linear-gradient(rgba(5,20,38,.72),rgba(5,20,38,.80)),url('{BG}');background-size:cover;background-position:center;background-attachment:fixed;}}
-    [data-testid='stHeader']{{background:transparent}} [data-testid='stMainBlockContainer']{{max-width:1250px;padding-top:1.5rem}}
-    h1,h2,h3,p,label,[data-testid='stMarkdownContainer']{{color:#fff}}
-    [data-testid='stVerticalBlockBorderWrapper']{{background:rgba(10,31,52,.82);border:1px solid #ffffff33;border-radius:16px}}
-    .stTextInput input,.stTextArea textarea{{background:#fff;color:#152033;border-radius:9px}}
-    .stButton>button,.stFormSubmitButton>button{{background:#0759a6;color:white;border-radius:10px;border:1px solid #b7d7f5;min-height:42px;font-weight:700}}
-    .stButton>button:hover,.stFormSubmitButton>button:hover{{background:#0877ce;color:white}}
-    .metric-card{{padding:14px;border-radius:12px;background:#ffffff18;border:1px solid #ffffff30}}
-    </style>""", unsafe_allow_html=True)
+try:
+    from supabase import create_client
+except ImportError:
+    create_client = None
 
-def page_heading(title, subtitle=""):
-    st.title(title)
-    if subtitle: st.caption(subtitle)
 
-def _load_df():
-    rows = get_all_complaints()
-    df = pd.DataFrame(rows or [])
-    if df.empty: return df
-    aliases = {"submitted_at":"created_at", "complaint_text":"description"}
-    for target, source in aliases.items():
-        if target not in df.columns and source in df.columns: df[target] = df[source]
-    return df
+# ----------------------------- Page setup -----------------------------------
+st.set_page_config(
+    page_title="Makkal Kural AI | Admin",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-def render_submit(show_title=True):
-    apply_app_style()
-    if show_title: page_heading("Submit a Complaint", "Describe the issue and keep the tracking ID shown after saving.")
-    with st.container(border=True):
-        st.subheader("Complaint details")
-        if "voice_result" not in st.session_state: st.session_state.voice_result = None
-        try:
-            audio = st.audio_input("Record your complaint in Tamil or English")
-        except Exception:
-            audio = None
-            st.info("Audio input is not available in this Streamlit version. You can type the complaint below.")
-        if audio is not None:
-            audio_bytes = audio.getvalue()
-            import hashlib
-            audio_hash = hashlib.sha256(audio_bytes).hexdigest()
-            if st.session_state.get("voice_hash") != audio_hash:
-                try:
-                    from voice_ai import process_complaint_audio
-                    with st.spinner("Recognizing speech… first run may download the Whisper model."):
-                        result = process_complaint_audio(audio_bytes)
-                    if result:
-                        st.session_state.voice_result = result
-                        st.session_state.voice_hash = audio_hash
-                        st.session_state["complaint_text_entry"] = result.get("original", "")
-                        st.success(f"Detected language: {result['language']}. Check the transcript before submitting.")
-                    else: st.warning("Speech was not recognized. Please try again or type your complaint.")
-                except Exception as exc: st.error(f"Voice recognition failed: {exc}")
-        voice = st.session_state.get("voice_result") or {}
-        if voice:
-            st.markdown("**Recognized original speech**")
-            st.write(voice.get("original", ""))
-            if voice.get("language") == "ta" and voice.get("english"):
-                with st.expander("English translation (for review)"):
-                    st.write(voice["english"])
-        initial_text = voice.get("original", "")
-        description = st.text_area("Complaint description (Tamil or English)", value=initial_text, height=130, key="complaint_text_entry", placeholder="Type your complaint here…")
-        categories = ["Auto-detect", "Garbage", "Drainage", "Water Supply", "Water Leakage", "Road Damage", "Street Light", "Electricity", "Public Safety", "Public Toilets", "Stray Animals", "Mosquitoes and Pests", "Other"]
-        category_choice = st.selectbox("Category", categories, index=0)
-        location = st.text_input("Village / street / landmark", placeholder="e.g. Anna Nagar, Chennai")
-        col1, col2 = st.columns(2)
-        with col1: lat_text = st.text_input("Latitude (optional)", placeholder="Needed only for map pin")
-        with col2: lon_text = st.text_input("Longitude (optional)", placeholder="Needed only for map pin")
-        if st.button("Submit complaint", type="primary", use_container_width=True, key="submit_complaint"):
-            if not description.strip(): st.error("Enter or record a complaint."); return
-            if not location.strip(): st.error("Enter the complaint location."); return
-            try:
-                lat = float(lat_text) if lat_text.strip() else None
-                lon = float(lon_text) if lon_text.strip() else None
-                if lat is not None and not -90 <= lat <= 90: st.error("Latitude must be between -90 and 90."); return
-                if lon is not None and not -180 <= lon <= 180: st.error("Longitude must be between -180 and 180."); return
-            except ValueError:
-                st.error("Latitude and longitude must be valid numbers."); return
-            category = classify_complaint(description) if category_choice == "Auto-detect" else category_choice
-            try:
-                with st.spinner("Saving complaint…"):
-                    tracking_id, created_at = save_complaint(description.strip(), category, location.strip(), latitude=lat, longitude=lon)
-                st.session_state.last_tracking_id = tracking_id
-                st.success("Complaint submitted successfully!")
-                st.code(tracking_id, language=None)
-                st.caption(f"Submitted at: {created_at}. Save this tracking ID to check progress.")
-                language = (voice.get("language") or "en")
-                try:
-                    from voice_ai import confirmation_audio
-                    st.audio(confirmation_audio(language), format="audio/mp3")
-                except Exception: pass
-                st.session_state.voice_result = None
-                st.session_state.voice_hash = None
-            except Exception as exc:
-                # Keep a local copy if the cloud database cannot be reached.
-                try:
-                    from offline_storage import save_offline_complaint
-                    local_id = save_offline_complaint(description.strip(), category, location.strip())
-                    st.warning("The cloud database is unavailable. Your complaint is saved in this server's local offline queue, but it has not yet received a tracking ID.")
-                    st.caption(f"Offline reference: {local_id}. An administrator must sync it when connectivity returns.")
-                except Exception as offline_exc:
-                    st.error(f"We could not confirm that the complaint was saved online or offline. Online error: {exc}. Offline error: {offline_exc}")
+st.markdown(
+    """
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+      html, body, [class*="css"] { font-family: Inter, sans-serif; }
+      .stApp {
+        background:
+          radial-gradient(circle at 10% 0%, rgba(14,165,233,.10), transparent 30%),
+          linear-gradient(135deg, #f7faff 0%, #f1f5fb 55%, #f8fafc 100%);
+      }
+      [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0b1730 0%, #10264a 100%);
+      }
+      [data-testid="stSidebar"] * { color: #edf5ff !important; }
+      .brand { display:flex; align-items:center; gap:12px; margin: 0 0 20px 0; }
+      .brand-icon {
+        width:48px;height:48px;border-radius:15px;
+        display:flex;align-items:center;justify-content:center;
+        background:linear-gradient(135deg,#0ea5e9,#2563eb);
+        color:white;font-size:24px;box-shadow:0 10px 25px rgba(37,99,235,.25);
+      }
+      .brand-name { font-size:22px;font-weight:800;color:#12213b;line-height:1.1; }
+      .brand-sub { color:#64748b;font-size:12px;margin-top:4px; }
+      .login-wrap {
+        max-width: 470px; margin: 5vh auto 0 auto; padding: 34px;
+        background: rgba(255,255,255,.94); border:1px solid #e3eaf4;
+        border-radius:26px; box-shadow:0 24px 70px rgba(15,35,70,.12);
+      }
+      .login-icon {
+        height:64px;width:64px;margin:0 auto 16px auto;border-radius:20px;
+        display:flex;align-items:center;justify-content:center;
+        background:linear-gradient(135deg,#0ea5e9,#2563eb);
+        color:#fff;font-size:30px;
+      }
+      .login-title {text-align:center;color:#10213d;font-size:28px;font-weight:800;}
+      .login-sub {text-align:center;color:#64748b;font-size:14px;margin:8px 0 22px;}
+      .metric-card {
+        background:white;border:1px solid #e5edf7;border-radius:18px;
+        padding:18px 20px;box-shadow:0 5px 18px rgba(15,35,70,.04);
+      }
+      .metric-label {font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#64748b;font-weight:700;}
+      .metric-value {font-size:30px;font-weight:800;color:#10213d;margin-top:7px;}
+      .metric-note {font-size:12px;color:#64748b;margin-top:3px;}
+      .section-heading {font-size:20px;font-weight:800;color:#10213d;margin:5px 0 3px;}
+      .section-caption {font-size:13px;color:#64748b;margin-bottom:14px;}
+      div[data-testid="stForm"] {background:white;border:1px solid #e5edf7;padding:18px;border-radius:16px;}
+      .stButton > button, div[data-testid="stFormSubmitButton"] > button {
+        border-radius:10px;font-weight:700;min-height:42px;
+      }
+      .small-muted {font-size:12px;color:#64748b;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-def render_tracking(show_title=True):
-    apply_app_style()
-    if show_title: page_heading("Track your complaint", "Use the tracking ID shown after submission.")
-    with st.form("tracking_form"):
-        tracking_id = st.text_input("Tracking ID", value=st.session_state.get("last_tracking_id", ""), placeholder="MKAI-XXXXXXXXXX")
-        submitted = st.form_submit_button("Check status", use_container_width=True)
-    if submitted:
-        if not tracking_id.strip(): st.warning("Enter a tracking ID."); return
-        try: complaint = get_complaint(tracking_id)
-        except Exception as exc: st.error(f"Could not check status: {exc}"); return
-        if not complaint: st.warning("No complaint found for that tracking ID."); return
-        st.success(f"Current status: {complaint.get('status', 'Unknown')}")
-        for label, key in [("Tracking ID","tracking_id"),("Complaint","description"),("Category","category"),("Location","location"),("Submitted","created_at"),("Resolution note","resolution_note")]:
-            value = complaint.get(key)
-            if value: st.write(f"**{label}:** {value}")
-        if complaint.get("status") == "Resolved": st.toast("Your complaint has been marked resolved.", icon="✅")
 
-def render_public(show_title=True):
-    apply_app_style()
-    if show_title: page_heading("Complaint status board", "Public summary of submitted complaints. Sensitive personal details are not displayed.")
-    try: df = _load_df()
-    except Exception as exc: st.error(f"Could not load complaints: {exc}"); return
-    if df.empty: st.info("No complaints have been submitted yet."); return
-    for col in ["tracking_id","description","location","category","status","created_at","latitude","longitude"]:
-        if col not in df.columns: df[col] = None
-    c1,c2,c3 = st.columns(3)
-    with c1: search = st.text_input("Search tracking ID or location")
-    with c2: category = st.selectbox("Category", ["All"]+sorted(df.category.fillna("Other").astype(str).unique().tolist()))
-    with c3: status = st.selectbox("Status", ["All"]+sorted(df.status.fillna("Submitted").astype(str).unique().tolist()))
-    filtered=df.copy()
-    if search.strip(): filtered=filtered[filtered.apply(lambda r: search.casefold() in f"{r.get('tracking_id','')} {r.get('location','')}".casefold(),axis=1)]
-    if category != "All": filtered=filtered[filtered.category.astype(str)==category]
-    if status != "All": filtered=filtered[filtered.status.astype(str)==status]
-    st.caption(f"{len(filtered)} complaint(s)")
-    display=filtered[["tracking_id","category","location","status","created_at"]].rename(columns={"tracking_id":"Tracking ID","category":"Category","location":"Location","status":"Status","created_at":"Submitted"})
-    st.dataframe(display, use_container_width=True, hide_index=True)
-    valid=filtered.copy()
-    valid["latitude"]=pd.to_numeric(valid.latitude,errors="coerce"); valid["longitude"]=pd.to_numeric(valid.longitude,errors="coerce")
-    valid=valid.dropna(subset=["latitude","longitude"])
-    st.subheader("Complaint map")
-    if not valid.empty:
-        try:
-            import folium
-            from streamlit_folium import st_folium
-            center=[float(valid.latitude.mean()),float(valid.longitude.mean())]
-            m=folium.Map(location=center,zoom_start=11,control_scale=True)
-            for _,r in valid.iterrows():
-                popup=f"{r.get('tracking_id','')} | {r.get('category','')} | {r.get('status','')}"
-                folium.Marker([r.latitude,r.longitude],popup=popup,tooltip=str(r.get("location","Complaint"))).add_to(m)
-            st_folium(m, use_container_width=True, height=380, returned_objects=[])
-        except Exception as exc: st.info(f"Map could not load: {exc}")
-    else: st.info("Map pins appear when a complaint is submitted with coordinates. A place name alone cannot reliably determine a map pin; add geocoding in a later step.")
+# ----------------------------- Configuration --------------------------------
+def get_setting(name: str, default: str = "") -> str:
+    """Read Streamlit secrets first, then environment variables."""
+    try:
+        value = st.secrets.get(name, None)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    except Exception:
+        pass
+    return os.getenv(name, default).strip()
 
-def _verify_admin_key(key):
-    expected=os.getenv("ADMIN_ACCESS_KEY", "").strip()
-    return bool(expected) and hmac.compare_digest(str(key), expected)
 
-def _admin_login():
-    apply_app_style()
-    st.markdown("<div style='text-align:center'><h2>🔐 ADMIN ACCESS</h2><p>Enter your six-digit access key</p></div>", unsafe_allow_html=True)
-    if not os.getenv("ADMIN_ACCESS_KEY", "").strip():
-        st.error("Admin access is not configured. Set ADMIN_ACCESS_KEY in your hosting environment.")
-        return False
-    with st.form("admin_key_form"):
-        boxes=st.columns(6, gap="small")
-        digits=[]
-        for i,col in enumerate(boxes):
-            with col:
-                digits.append(st.text_input(f"Digit {i+1}", max_chars=1, type="password", key=f"admin_digit_{i}", label_visibility="collapsed", placeholder="•"))
-        st.markdown("<style>div[data-testid='stTextInput'] input{text-align:center;font-size:1.4rem;font-weight:800;min-height:52px;padding:0;border:2px solid #83b5e8;border-radius:9px}</style>", unsafe_allow_html=True)
-        submit=st.form_submit_button("CONFIRM", use_container_width=True)
-    if submit:
-        attempt=int(st.session_state.get("admin_attempts",0))
-        entered="".join(digits)
-        if attempt >= 5:
-            st.error("Too many failed attempts in this session. Refreshing will not clear server-side protections; contact the administrator if locked out.")
-        elif len(entered)!=6 or not entered.isdigit():
-            st.error("Enter all six digits.")
-        elif _verify_admin_key(entered):
-            st.session_state.admin_authenticated=True
-            st.session_state.admin_attempts=0
+ADMIN_ACCESS_KEY = get_setting("ADMIN_ACCESS_KEY")
+SUPABASE_URL = get_setting("SUPABASE_URL")
+SUPABASE_KEY = get_setting("SUPABASE_SERVICE_ROLE_KEY") or get_setting("SUPABASE_KEY")
+TABLE_NAME = get_setting("SUPABASE_TABLE", "complaints")
+STATUSES = ["Pending", "In Progress", "Resolved"]
+
+
+def get_supabase_client():
+    if create_client is None:
+        raise RuntimeError(
+            "Supabase package is missing. Add 'supabase' to requirements.txt."
+        )
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError(
+            "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) "
+            "in Render Environment Variables / Streamlit secrets."
+        )
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ----------------------------- Authentication --------------------------------
+def show_login():
+    st.markdown(
+        """
+        <div class="login-wrap">
+          <div class="login-icon">🔐</div>
+          <div class="login-title">Admin Verification</div>
+          <div class="login-sub">Enter your 6-digit access code to open the Makkal Kural AI dashboard.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # OTP-style UI: six separate visual boxes, without username/name fields.
+    # This verifies the configured ADMIN_ACCESS_KEY; it does not send an SMS/email OTP.
+    left, center, right = st.columns([1, 1.2, 1])
+    with center:
+        with st.form("admin_otp_form", clear_on_submit=False):
+            st.markdown("#### Enter verification code")
+            otp = st.text_input(
+                "6-digit code",
+                type="password",
+                max_chars=6,
+                placeholder="• • • • • •",
+                help="Enter the six-digit administrator code configured on the server.",
+                label_visibility="collapsed",
+            )
+            st.markdown(
+                """
+                <style>
+                  div[data-testid="stTextInput"] input {
+                    text-align:center;
+                    letter-spacing:.65em;
+                    font-size:24px;
+                    font-weight:800;
+                    padding:14px 12px;
+                    border-radius:12px;
+                    border:1px solid #cbd5e1;
+                    background:#f8fafc;
+                  }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            submitted = st.form_submit_button(
+                "Verify & Login", type="primary", use_container_width=True
+            )
+            if submitted:
+                if not ADMIN_ACCESS_KEY:
+                    st.error(
+                        "Admin verification is not configured. Set ADMIN_ACCESS_KEY in "
+                        "Render → your service → Environment, then redeploy."
+                    )
+                elif not otp or not otp.isdigit() or len(otp) != 6:
+                    st.error("Enter a valid 6-digit code.")
+                elif otp == ADMIN_ACCESS_KEY:
+                    st.session_state["mka_admin_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect verification code. Please try again.")
+        st.markdown(
+            '<p class="small-muted" style="text-align:center;">'
+            "Secure administrator access · Keep your code private"
+            "</p>",
+            unsafe_allow_html=True,
+        )
+
+
+# ----------------------------- Data helpers ----------------------------------
+def first_value(row: dict[str, Any], names: list[str], default: Any = None) -> Any:
+    for name in names:
+        value = row.get(name)
+        if value is not None and str(value).strip() != "":
+            return value
+    return default
+
+
+def normalise_complaint(row: dict[str, Any]) -> dict[str, Any]:
+    """Map common database column names to consistent dashboard fields."""
+    lat = first_value(row, ["latitude", "lat", "complaint_latitude"])
+    lon = first_value(row, ["longitude", "lng", "lon", "complaint_longitude"])
+    try:
+        lat = float(lat) if lat is not None else None
+        lon = float(lon) if lon is not None else None
+        if lat is not None and not (-90 <= lat <= 90):
+            lat = None
+        if lon is not None and not (-180 <= lon <= 180):
+            lon = None
+    except (TypeError, ValueError):
+        lat, lon = None, None
+
+    return {
+        **row,
+        "_tracking_id": str(first_value(row, ["tracking_id", "complaint_id", "id"], "N/A")),
+        "_category": str(first_value(row, ["category", "complaint_type", "issue_type"], "Uncategorized")),
+        "_description": str(first_value(row, ["description", "complaint_text", "message", "details"], "")),
+        "_status": str(first_value(row, ["status", "complaint_status"], "Pending")),
+        "_created_at": first_value(row, ["created_at", "submitted_at", "date", "timestamp"]),
+        "_location": str(first_value(row, ["location", "address", "place_name", "area"], "")),
+        "_latitude": lat,
+        "_longitude": lon,
+        "_resolution_notes": str(first_value(row, ["resolution_notes", "admin_notes", "remarks"], "")),
+        "_db_id": first_value(row, ["id", "tracking_id", "complaint_id"]),
+    }
+
+
+def fetch_complaints() -> list[dict[str, Any]]:
+    client = get_supabase_client()
+    response = client.table(TABLE_NAME).select("*").order("created_at", desc=True).execute()
+    records = getattr(response, "data", None) or []
+    return [normalise_complaint(item) for item in records]
+
+
+def update_complaint(row: dict[str, Any], new_status: str, notes: str) -> None:
+    client = get_supabase_client()
+    key_column = "id" if row.get("id") is not None else (
+        "tracking_id" if row.get("tracking_id") is not None else "complaint_id"
+    )
+    key_value = row.get(key_column)
+    if key_value is None:
+        raise RuntimeError("Could not find an ID field for this complaint.")
+
+    payload: dict[str, Any] = {"status": new_status}
+    # Add notes only if your table supports this column. If not, status update is
+    # retried without notes so status management can still work.
+    if notes.strip():
+        payload["resolution_notes"] = notes.strip()
+
+    try:
+        client.table(TABLE_NAME).update(payload).eq(key_column, key_value).execute()
+    except Exception:
+        if "resolution_notes" not in payload:
+            raise
+        payload.pop("resolution_notes", None)
+        client.table(TABLE_NAME).update(payload).eq(key_column, key_value).execute()
+
+
+def metric_card(label: str, value: int, note: str) -> None:
+    st.markdown(
+        f"""
+        <div class="metric-card">
+          <div class="metric-label">{label}</div>
+          <div class="metric-value">{value}</div>
+          <div class="metric-note">{note}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ----------------------------- Dashboard -------------------------------------
+def show_dashboard():
+    with st.sidebar:
+        st.markdown(
+            """
+            <div style="padding:12px 2px 20px;">
+              <div style="font-size:13px;letter-spacing:.1em;color:#93c5fd;font-weight:700;">MAKKAL KURAL AI</div>
+              <div style="font-size:23px;font-weight:800;margin-top:7px;">Admin Console</div>
+              <div style="font-size:12px;opacity:.75;margin-top:4px;">Complaint operations</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        page = st.radio("NAVIGATION", ["Overview & All Complaints", "Complaint Map"], label_visibility="visible")
+        st.divider()
+        st.caption("Signed in as administrator")
+        if st.button("Log out", use_container_width=True):
+            st.session_state["mka_admin_authenticated"] = False
             st.rerun()
-        else:
-            st.session_state.admin_attempts=attempt+1
-            st.error("Incorrect access key.")
-    return bool(st.session_state.get("admin_authenticated",False))
 
-def render_admin(show_title=True):
-    apply_app_style()
-    if not st.session_state.get("admin_authenticated",False):
-        if not _admin_login(): return
-    if show_title: page_heading("Admin Dashboard", "Review, update and monitor public complaints.")
-    top_left, top_right = st.columns([4, 1])
-    with top_right:
-        if st.button("Log out", key="admin_logout"):
-            st.session_state.admin_authenticated=False
-            for i in range(6): st.session_state.pop(f"admin_digit_{i}",None)
+    st.markdown(
+        """
+        <div class="brand">
+          <div class="brand-icon">🏛️</div>
+          <div>
+            <div class="brand-name">Makkal Kural AI</div>
+            <div class="brand-sub">Public complaint administration dashboard</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.title("Overview & All Complaints" if page == "Overview & All Complaints" else "Complaint Location Map")
+    st.caption("Review incoming reports, track progress, and manage complaint status.")
+
+    try:
+        rows = fetch_complaints()
+    except Exception as exc:
+        st.error(f"Could not load complaints: {exc}")
+        st.info(
+            "Check that SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY), "
+            "the table name, and database permissions are configured correctly."
+        )
+        st.stop()
+
+    if not rows:
+        st.info("No complaints found in the database yet.")
+        if st.button("Refresh complaints"):
             st.rerun()
-    with top_left:
-        if st.button("Sync offline queue", key="sync_offline_queue"):
-            try:
-                from offline_storage import sync_pending_complaints, get_pending_complaints
-                pending_before = len(get_pending_complaints())
-                synced = sync_pending_complaints()
-                st.success(f"Synced {synced} complaint(s). {max(0, pending_before-synced)} item(s) may still need retrying.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Offline queue sync failed: {exc}")
-    try: df=_load_df()
-    except Exception as exc: st.error(f"Could not load admin data: {exc}"); return
-    if df.empty: st.info("No complaints yet."); return
-    for col in ["tracking_id","description","location","category","status","created_at","latitude","longitude"]:
-        if col not in df.columns: df[col]=None
-    total=len(df); resolved=int((df.status=="Resolved").sum()); progress=int((df.status=="In Progress").sum()); open_count=int((~df.status.isin(["Resolved","Rejected"])).sum())
-    a,b,c,d=st.columns(4)
-    a.metric("Total complaints",total); b.metric("Open",open_count); c.metric("In progress",progress); d.metric("Resolved",resolved)
-    st.subheader("Complaint status graph")
-    counts=df.status.fillna("Unknown").value_counts().rename_axis("Status").reset_index(name="Complaints")
-    st.bar_chart(counts.set_index("Status"))
-    st.subheader("Category graph")
-    cats=df.category.fillna("Other").value_counts().rename_axis("Category").reset_index(name="Complaints")
-    st.bar_chart(cats.set_index("Category"))
-    st.subheader("Complaint records")
-    search=st.text_input("Search by tracking ID, text, or location", key="admin_search")
-    filtered=df.copy()
-    if search.strip(): filtered=filtered[filtered.apply(lambda r: search.casefold() in f"{r.get('tracking_id','')} {r.get('description','')} {r.get('location','')}".casefold(),axis=1)]
-    st.dataframe(filtered[[c for c in ["tracking_id","description","category","location","status","created_at"] if c in filtered.columns]],use_container_width=True,hide_index=True)
-    st.subheader("Update a complaint")
-    ids=filtered.tracking_id.dropna().astype(str).tolist()
-    if not ids: st.info("No matching complaints to update."); return
-    with st.form("admin_update_form"):
-        chosen=st.selectbox("Tracking ID",ids)
-        new_status=st.selectbox("New status",STATUSES)
-        note=st.text_area("Resolution / admin note (optional)", max_chars=1000)
-        update=st.form_submit_button("Save status")
-    if update:
-        try:
-            # If the optional resolution_note column is not yet in the database, retry status only.
-            try: ok=update_status(chosen,new_status,note if note.strip() else None)
-            except Exception as exc:
-                if note.strip():
-                    ok=update_status(chosen,new_status,None)
-                    st.warning("Status saved. Resolution notes need the optional resolution_note column in Supabase.")
-                else: raise exc
-            if ok: st.success("Complaint status updated."); st.rerun()
-            else: st.error("No complaint was updated. Check the tracking ID.")
-        except Exception as exc: st.error(f"Could not update status: {exc}")
+        return
+
+    df = pd.DataFrame(rows)
+    status_series = df["_status"].astype(str).str.lower()
+    total = len(df)
+    pending = int(status_series.isin(["pending", "new", "received"]).sum())
+    in_progress = int(status_series.isin(["in progress", "in-progress", "processing", "under review"]).sum())
+    resolved = int(status_series.isin(["resolved", "closed", "completed"]).sum())
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        metric_card("Total complaints", total, "All submitted reports")
+    with m2:
+        metric_card("Pending", pending, "Awaiting action")
+    with m3:
+        metric_card("In progress", in_progress, "Currently being handled")
+    with m4:
+        metric_card("Resolved", resolved, "Marked complete")
+
+    st.write("")
+    if page == "Complaint Map":
+        show_map(rows)
+        return
+
+    st.markdown('<div class="section-heading">All Complaints</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Search by tracking ID, category, location, or complaint text. '
+        "Use the filters to narrow the list.</div>",
+        unsafe_allow_html=True,
+    )
+
+    f1, f2, f3 = st.columns([2, 1, 1])
+    with f1:
+        search_text = st.text_input("Search complaints", placeholder="Tracking ID, location, category, keywords…")
+    with f2:
+        categories = sorted({r["_category"] for r in rows if r["_category"]})
+        category_filter = st.selectbox("Category", ["All categories"] + categories)
+    with f3:
+        status_values = sorted({r["_status"] for r in rows if r["_status"]})
+        status_filter = st.selectbox("Status", ["All statuses"] + status_values)
+
+    filtered = rows
+    if search_text.strip():
+        q = search_text.strip().lower()
+        filtered = [
+            r for r in filtered
+            if q in " ".join([
+                r["_tracking_id"], r["_category"], r["_description"], r["_location"], r["_status"]
+            ]).lower()
+        ]
+    if category_filter != "All categories":
+        filtered = [r for r in filtered if r["_category"] == category_filter]
+    if status_filter != "All statuses":
+        filtered = [r for r in filtered if r["_status"] == status_filter]
+
+    st.caption(f"Showing {len(filtered)} of {len(rows)} complaints")
+
+    display_rows = []
+    for r in filtered:
+        display_rows.append({
+            "Tracking ID": r["_tracking_id"],
+            "Category": r["_category"],
+            "Location": r["_location"] or "Not provided",
+            "Status": r["_status"],
+            "Submitted": str(r["_created_at"] or "Unknown")[:19].replace("T", " "),
+            "Map pin": "Available" if r["_latitude"] is not None and r["_longitude"] is not None else "No coordinates",
+        })
+    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="section-heading">Update a complaint</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Select a complaint to change its status. '
+        "A status update is saved to the database.</div>",
+        unsafe_allow_html=True,
+    )
+    if filtered:
+        labels = {
+            f'{r["_tracking_id"]} · {r["_category"]} · {r["_status"]}': r
+            for r in filtered
+        }
+        selected_label = st.selectbox("Select complaint", list(labels.keys()))
+        selected = labels[selected_label]
+        with st.form("update_complaint_form"):
+            current_status = selected["_status"]
+            status_options = STATUSES.copy()
+            if current_status not in status_options:
+                status_options.insert(0, current_status)
+            default_index = status_options.index(current_status) if current_status in status_options else 0
+            new_status = st.selectbox("New status", status_options, index=default_index)
+            notes = st.text_area(
+                "Resolution / admin notes (optional)",
+                value=selected["_resolution_notes"],
+                placeholder="Add a short update for the administration team…",
+            )
+            save = st.form_submit_button("Save complaint update", type="primary")
+            if save:
+                try:
+                    update_complaint(selected, new_status, notes)
+                    st.success("Complaint updated successfully.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not update complaint: {exc}")
+                    st.caption(
+                        "If the status column or ID column in your schema has a different name, "
+                        "adjust update_complaint() to match your database."
+                    )
+
+    st.markdown('<div class="section-heading">Complaint locations</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Complaints with saved coordinates appear as pins on the map.</div>',
+        unsafe_allow_html=True,
+    )
+    show_map(filtered)
+
+
+def show_map(rows: list[dict[str, Any]]) -> None:
+    mappable = [
+        r for r in rows
+        if r.get("_latitude") is not None and r.get("_longitude") is not None
+    ]
+    if folium is None or st_folium is None:
+        st.warning("Map packages are not installed. Add folium and streamlit-folium to requirements.txt.")
+        return
+    if not mappable:
+        st.info(
+            "No complaint coordinates are saved yet. New complaints must store latitude and longitude "
+            "in the database for their map pins to appear."
+        )
+        return
+
+    center_lat = sum(r["_latitude"] for r in mappable) / len(mappable)
+    center_lon = sum(r["_longitude"] for r in mappable) / len(mappable)
+    complaint_map = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=11,
+        tiles="OpenStreetMap",
+        control_scale=True,
+    )
+
+    for row in mappable:
+        popup_html = f"""
+        <div style="font-family:Arial;min-width:190px;">
+          <b>{row["_tracking_id"]}</b><br>
+          <b>Category:</b> {row["_category"]}<br>
+          <b>Status:</b> {row["_status"]}<br>
+          <b>Location:</b> {row["_location"] or "Not provided"}<br>
+          <b>Complaint:</b> {row["_description"][:240]}
+        </div>
+        """
+        folium.Marker(
+            location=[row["_latitude"], row["_longitude"]],
+            tooltip=f'{row["_tracking_id"]} · {row["_category"]}',
+            popup=folium.Popup(popup_html, max_width=320),
+            icon=folium.Icon(
+                color="green" if row["_status"].lower() in ["resolved", "closed", "completed"]
+                else "orange" if row["_status"].lower() in ["in progress", "in-progress", "processing"]
+                else "red",
+                icon="info-sign",
+            ),
+        ).add_to(complaint_map)
+
+    st_folium(complaint_map, use_container_width=True, height=520, returned_objects=[])
+
+
+# -------------------------------- Main ----------------------------------------
+if not ADMIN_ACCESS_KEY:
+    st.warning(
+        "ADMIN_ACCESS_KEY is not configured. Add it in Render → your web service → "
+        "Environment, then redeploy. Do not hard-code the secret in this file."
+    )
+
+if st.session_state.get("mka_admin_authenticated", False):
+    show_dashboard()
+else:
+    show_login()
