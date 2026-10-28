@@ -31,15 +31,12 @@ TABLE_NAME = get_setting("SUPABASE_TABLE", "complaints")
 
 def _get_client():
     if create_client is None:
-        st.error("Missing 'supabase' package. Ensure it is listed in requirements.txt.")
         return None
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("Missing SUPABASE_URL or SUPABASE_KEY/SUPABASE_SERVICE_ROLE_KEY environment variables in Render.")
         return None
     try:
         return create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as e:
-        st.error(f"Failed to initialize Supabase client: {e}")
+    except Exception:
         return None
 
 
@@ -49,7 +46,6 @@ def save_complaint(payload: dict) -> bool:
     if not client:
         return False
     try:
-        # Map payload to match table column names if necessary
         db_payload = {
             "tracking_id": payload.get("tracking_id"),
             "category": payload.get("category", "Other"),
@@ -109,7 +105,6 @@ def update_status(tracking_id: str, new_status: str, notes: str) -> bool:
     if not client:
         return False
     try:
-        # Tries resolution_note first to align with SQL schema, with fallback
         payload = {
             "status": new_status,
             "resolution_note": notes.strip(),
