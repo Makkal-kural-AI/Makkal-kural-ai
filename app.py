@@ -39,9 +39,7 @@ st.markdown(
     .hero { text-align: center; padding: 35px 0 20px; color: white; }
     .hero h1 { font-size: clamp(38px, 6vw, 72px); font-weight: 900; color: white; }
     .hero p { font-size: clamp(18px, 2vw, 25px); color: white; }
-    .stButton>button {
-        min-height: 48px; border-radius: 12px; font-weight: 800; background: #073e70; color: white; border: 1px solid #c5e4ff;
-    }
+    .stButton>button { min-height: 48px; border-radius: 12px; font-weight: 800; background: #073e70; color: white; border: 1px solid #c5e4ff; }
     .stButton>button:hover { background: #0877ce; color: white; }
     </style>
     """,
