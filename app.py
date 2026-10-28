@@ -1,7 +1,11 @@
+"""
+Makkal Kural AI — Main Entry Point
+Calls render_submit(), render_tracking(), render_public(), and render_admin() from dashboard.py depending on selected page.
+"""
+
 import streamlit as st
 from dashboard import (
     render_admin,
-    render_home,
     render_public,
     render_submit,
     render_tracking,
@@ -23,7 +27,7 @@ def go(page: str):
     st.rerun()
 
 
-# Global UI Theme & CSS
+# Custom UI CSS
 st.markdown(
     """
     <style>
@@ -63,15 +67,38 @@ with nav:
             if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
                 go(page_name)
 
-# Workflow Navigation Routing
+# Page Router calling functions exported from dashboard.py
 if st.session_state.page == "Home":
-    render_home(go)
+    st.markdown(
+        """
+        <div style="text-align: center; padding: 35px 0 20px; color: white;">
+            <h1 style="font-size: clamp(38px, 6vw, 72px); font-weight: 900;">உங்கள் குரல், உங்கள் ஊர்</h1>
+            <h1 style="font-size: clamp(28px, 4vw, 50px); font-weight: 800;">Your Voice, Your Village</h1>
+            <p style="font-size: clamp(18px, 2vw, 25px);">Report local problems. Track progress. Build better communities.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    a, b, c = st.columns(3)
+    with a:
+        if st.button("📝 Submit a complaint", use_container_width=True):
+            go("Submit Complaint")
+    with b:
+        if st.button("🔎 Track a complaint", use_container_width=True):
+            go("Tracking")
+    with c:
+        if st.button("🔐 Admin dashboard", use_container_width=True):
+            go("Admin Dashboard")
+
 elif st.session_state.page == "Submit Complaint":
     render_submit()
+
 elif st.session_state.page == "Tracking":
     render_tracking()
+
 elif st.session_state.page == "All Complaints":
     render_public()
+
 elif st.session_state.page == "Admin Dashboard":
     render_admin()
 
