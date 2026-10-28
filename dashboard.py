@@ -199,61 +199,82 @@ def render_public() -> None:
         st.info("No complaints found.")
 
 
+import time
+
 def render_admin() -> None:
+    # Initialize session state variables for security lockout tracking
+    if "mka_failed_attempts" not in st.session_state:
+        st.session_state["mka_failed_attempts"] = 0
+    if "mka_lockout_until" not in st.session_state:
+        st.session_state["mka_lockout_until"] = 0.0
+
     if not st.session_state.get("mka_admin_authenticated", False):
+        current_time = time.time()
+        is_locked = current_time < st.session_state["mka_lockout_until"]
+        remaining_lock = int(st.session_state["mka_lockout_until"] - current_time)
+
         st.markdown(
             """
             <style>
-              .admin-card-wrapper {
+              .admin-outer-wrap {
                 display: flex;
                 justify-content: center;
                 align-items: center;
-                padding: 40px 0;
+                padding: 3vh 0;
               }
-              .admin-card {
+              .admin-modal-card {
                 width: 100%;
-                max-width: 480px;
+                max-width: 500px;
                 background: #ffffff;
-                border-radius: 24px;
-                padding: 35px 30px 25px 30px;
-                box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
-                text-align: center;
+                border-radius: 20px;
+                box-shadow: 0 25px 60px rgba(0,0,0,0.3);
+                overflow: hidden;
                 color: #0f172a;
+                font-family: Inter, sans-serif;
               }
-              .admin-icon-badge {
-                width: 52px;
-                height: 52px;
-                background: linear-gradient(135deg, #0ea5e9, #2563eb);
-                border-radius: 14px;
+              .admin-modal-header {
+                background: #0b1329;
+                color: white;
+                padding: 16px 24px;
+                font-size: 15px;
+                font-weight: 600;
                 display: flex;
                 align-items: center;
-                justify-content: center;
-                margin: 0 auto 16px auto;
-                color: white;
-                font-size: 24px;
-                box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3);
+                gap: 10px;
               }
-              .admin-card h2 {
-                font-size: 26px !important;
-                font-weight: 800 !important;
-                color: #0f172a !important;
-                margin: 0 0 6px 0 !important;
+              .admin-modal-body {
+                padding: 30px 32px 25px 32px;
+                text-align: center;
               }
-              .admin-card p {
-                font-size: 13px !important;
-                color: #64748b !important;
-                margin: 0 0 25px 0 !important;
+              .lock-icon-container {
+                font-size: 38px;
+                margin-bottom: 12px;
               }
-              div[data-testid="stForm"] {
-                background: transparent !important;
-                border: none !important;
-                padding: 0 !important;
-                box-shadow: none !important;
+              .secure-title {
+                font-size: 20px;
+                font-weight: 800;
+                color: #0f172a;
+                margin-bottom: 4px;
               }
+              .secure-subtitle {
+                font-size: 13px;
+                color: #64748b;
+                margin-bottom: 22px;
+              }
+              .access-label {
+                text-align: left;
+                font-size: 12px;
+                font-weight: 700;
+                color: #334155;
+                margin-bottom: 8px;
+                text-transform: uppercase;
+                letter-spacing: .05em;
+              }
+              /* Style Streamlit text input to mimic individual segmented OTP boxes */
               div[data-testid="stTextInput"] input {
                 text-align: center !important;
-                letter-spacing: 0.5em !important;
-                font-size: 22px !important;
+                letter-spacing: 0.75em !important;
+                font-size: 24px !important;
                 font-weight: 800 !important;
                 padding: 12px !important;
                 border-radius: 12px !important;
@@ -274,40 +295,68 @@ def render_admin() -> None:
               div[data-testid="stFormSubmitButton"] > button:hover {
                 background: #1d4ed8 !important;
               }
+              .admin-modal-footer {
+                border-top: 1px solid #e2e8f0;
+                padding: 14px 24px;
+                font-size: 11px;
+                color: #64748b;
+                text-align: center;
+                background: #fafafa;
+              }
             </style>
 
-            <div class="admin-card-wrapper">
-              <div class="admin-card">
-                <div class="admin-icon-badge">🔒</div>
-                <h2>Admin Access</h2>
-                <p>Enter the 6-digit access key to continue</p>
+            <div class="admin-outer-wrap">
+              <div class="admin-modal-card">
+                <div class="admin-modal-header">
+                  <span>🎙️</span> Makkal Kural AI · Administration
+                </div>
+                <div class="admin-modal-body">
+                  <div class="lock-icon-container">🔒</div>
+                  <div class="secure-title">🔐 Secure Admin Access</div>
+                  <div class="secure-subtitle">Enter the 6-digit access key to continue</div>
+                  <div class="access-label">Access Key (6 Digits)</div>
             """,
             unsafe_allow_html=True,
         )
 
-        _, center, _ = st.columns([1, 1.8, 1])
-        with center:
-            with st.form("admin_auth_form"):
-                code = st.text_input(
-                    "6-digit Access Key",
-                    type="password",
-                    max_chars=6,
-                    placeholder="• • • • • •",
-                    label_visibility="collapsed",
-                )
-                submitted = st.form_submit_button(
-                    "Confirm →", use_container_width=True
-                )
-                if submitted:
-                    if code == ADMIN_ACCESS_KEY or code == "123456":
-                        st.session_state["mka_admin_authenticated"] = True
-                        st.rerun()
+        with st.form("admin_auth_form"):
+            code = st.text_input(
+                "Access Key",
+                type="password",
+                max_chars=6,
+                placeholder="• • • • • •",
+                label_visibility="collapsed",
+                disabled=is_locked,
+            )
+            
+            if is_locked:
+                st.error(f"⚠️ Access Temporarily Locked: Wait {remaining_lock} seconds ({st.session_state['mka_failed_attempts']}/5 failed attempts)[cite: 5]")
+
+            submitted = st.form_submit_button(
+                "Confirm access →", use_container_width=True, disabled=is_locked
+            )
+            
+            if submitted:
+                if is_locked:
+                    pass
+                elif code == ADMIN_ACCESS_KEY or code == "123456":
+                    st.session_state["mka_admin_authenticated"] = True
+                    st.session_state["mka_failed_attempts"] = 0
+                    st.rerun()
+                else:
+                    st.session_state["mka_failed_attempts"] += 1
+                    if st.session_state["mka_failed_attempts"] >= 5:
+                        st.session_state["mka_lockout_until"] = time.time() + 60
+                        st.error("⚠️ Maximum attempts exceeded. Locked for 60 seconds.")
                     else:
-                        st.error("Incorrect access key. Please try again.")
+                        st.error(f"Incorrect access key. ({st.session_state['mka_failed_attempts']}/5 failed attempts)")
 
         st.markdown(
             """
-                <p style="font-size: 11px !important; color: #94a3b8 !important; margin-top: 15px !important;">🔒 Authorized personnel only</p>
+                </div>
+                <div class="admin-modal-footer">
+                  <b>Makkal Kural AI Grievance Portal</b> | For authorized personnel only
+                </div>
               </div>
             </div>
             """,
