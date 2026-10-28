@@ -44,12 +44,12 @@ def normalise_record(row: dict) -> dict:
         **row,
         "_tracking_id": str(row.get("tracking_id", row.get("id", "N/A"))),
         "_category": str(row.get("category", "Uncategorized")),
-        "_description": str(row.get("description", "")),
+        "_description": str(row.get("description", row.get("complaint_text", ""))),
         "_status": str(row.get("status", "Pending")),
-        "_location": str(row.get("location", "")),
+        "_location": str(row.get("location", "Not provided")),
         "_latitude": lat,
         "_longitude": lon,
-        "_resolution_notes": str(row.get("resolution_notes", "")),
+        "_resolution_notes": str(row.get("resolution_note", row.get("resolution_notes", ""))),
     }
 
 
@@ -90,6 +90,9 @@ def show_map(rows: list[dict], height: int = 450) -> None:
     )
 
 
+# ----------------------------- VIEW RENDERERS -----------------------------
+
+
 def render_submit() -> None:
     st.title("📝 Submit a Complaint")
     st.caption("Select your location on the map and fill in the issue details.")
@@ -107,8 +110,7 @@ def render_submit() -> None:
             selected_lat = map_data["last_clicked"]["lat"]
             selected_lon = map_data["last_clicked"]["lng"]
             st.success(
-                f"Selected Coordinates: Lat {selected_lat:.5f}, Lon"
-                f" {selected_lon:.5f}"
+                f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}"
             )
 
     with st.form("submit_form"):
@@ -143,8 +145,7 @@ def render_submit() -> None:
                 }
                 if save_complaint(payload):
                     st.success(
-                        "Complaint registered successfully! Tracking ID:"
-                        f" **{trk_id}**"
+                        f"Complaint registered successfully! Tracking ID: **{trk_id}**"
                     )
 
 
@@ -203,22 +204,88 @@ def render_admin() -> None:
         st.markdown(
             """
             <style>
-              .admin-card-wrapper { display: flex; justify-content: center; align-items: center; padding: 4vh 0; }
-              .admin-card { width: 100%; max-width: 520px; background: #ffffff; border-radius: 22px; padding: 30px 35px; box-shadow: 0 15px 45px rgba(0,0,0,0.2); text-align: center; color: #0f172a; }
-              div[data-testid="stTextInput"] input { text-align: center !important; letter-spacing: 0.5em !important; font-size: 22px !important; font-weight: 800 !important; }
+              .admin-card-wrapper {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 40px 0;
+              }
+              .admin-card {
+                width: 100%;
+                max-width: 480px;
+                background: #ffffff;
+                border-radius: 24px;
+                padding: 35px 30px 25px 30px;
+                box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+                text-align: center;
+                color: #0f172a;
+              }
+              .admin-icon-badge {
+                width: 52px;
+                height: 52px;
+                background: linear-gradient(135deg, #0ea5e9, #2563eb);
+                border-radius: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 16px auto;
+                color: white;
+                font-size: 24px;
+                box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3);
+              }
+              .admin-card h2 {
+                font-size: 26px !important;
+                font-weight: 800 !important;
+                color: #0f172a !important;
+                margin: 0 0 6px 0 !important;
+              }
+              .admin-card p {
+                font-size: 13px !important;
+                color: #64748b !important;
+                margin: 0 0 25px 0 !important;
+              }
+              div[data-testid="stForm"] {
+                background: transparent !important;
+                border: none !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+              }
+              div[data-testid="stTextInput"] input {
+                text-align: center !important;
+                letter-spacing: 0.5em !important;
+                font-size: 22px !important;
+                font-weight: 800 !important;
+                padding: 12px !important;
+                border-radius: 12px !important;
+                border: 1px solid #cbd5e1 !important;
+                background: #f8fafc !important;
+                color: #0f172a !important;
+              }
+              div[data-testid="stFormSubmitButton"] > button {
+                background: #2563eb !important;
+                color: white !important;
+                border: none !important;
+                border-radius: 12px !important;
+                font-weight: 700 !important;
+                height: 48px !important;
+                margin-top: 10px !important;
+                box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3) !important;
+              }
+              div[data-testid="stFormSubmitButton"] > button:hover {
+                background: #1d4ed8 !important;
+              }
             </style>
+
             <div class="admin-card-wrapper">
               <div class="admin-card">
-                <div style="font-size: 28px; margin-bottom: 8px;">🔒</div>
-                <h2 style="margin:0;">Admin Access</h2>
-                <p style="color: #64748b; font-size: 13px;">Enter the 6-digit access key to continue</p>
-              </div>
-            </div>
+                <div class="admin-icon-badge">🔒</div>
+                <h2>Admin Access</h2>
+                <p>Enter the 6-digit access key to continue</p>
             """,
             unsafe_allow_html=True,
         )
 
-        _, center, _ = st.columns([1, 1.3, 1])
+        _, center, _ = st.columns([1, 1.8, 1])
         with center:
             with st.form("admin_auth_form"):
                 code = st.text_input(
@@ -228,14 +295,24 @@ def render_admin() -> None:
                     placeholder="• • • • • •",
                     label_visibility="collapsed",
                 )
-                if st.form_submit_button(
-                    "Confirm →", type="primary", use_container_width=True
-                ):
+                submitted = st.form_submit_button(
+                    "Confirm →", use_container_width=True
+                )
+                if submitted:
                     if code == ADMIN_ACCESS_KEY or code == "123456":
                         st.session_state["mka_admin_authenticated"] = True
                         st.rerun()
                     else:
-                        st.error("Incorrect access key.")
+                        st.error("Incorrect access key. Please try again.")
+
+        st.markdown(
+            """
+                <p style="font-size: 11px !important; color: #94a3b8 !important; margin-top: 15px !important;">🔒 Authorized personnel only</p>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     # Authenticated Admin Dashboard & Analytics View
