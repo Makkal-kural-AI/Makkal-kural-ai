@@ -125,7 +125,7 @@ def update_complaint(row: dict[str, Any], new_status: str, notes: str) -> None:
 def show_map(rows: list[dict[str, Any]], height: int = 450) -> None:
     mappable = [r for r in rows if r.get("_latitude") is not None and r.get("_longitude") is not None]
     if folium is None or st_folium is None or not mappable:
-        st.info("வரைபடத்தில் காட்ட எந்த தகவல்களும் இல்லை.")
+        st.info("No complaint coordinates available to display on the map.")
         return
 
     center_lat = sum(r["_latitude"] for r in mappable) / len(mappable)
@@ -149,8 +149,8 @@ def show_map(rows: list[dict[str, Any]], height: int = 450) -> None:
 # ----------------------------- Exported Functions ----------------------------
 
 def render_submit() -> None:
-    st.title("📝 புகாரைப் பதிவு செய்ய")
-    st.caption("வரைபடத்தில் உங்கள் இடத்தை தேர்வு செய்து தகவல்களை நிரப்பவும்.")
+    st.title("📝 Submit a Complaint")
+    st.caption("Select your issue location on the map and fill in the complaint details.")
 
     default_lat, default_lon = 13.0827, 80.2707
     selected_lat, selected_lon = None, None
@@ -162,15 +162,15 @@ def render_submit() -> None:
         if map_data and map_data.get("last_clicked"):
             selected_lat = map_data["last_clicked"]["lat"]
             selected_lon = map_data["last_clicked"]["lng"]
-            st.success(f"தேர்வு செய்யப்பட்ட இடம்: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
+            st.success(f"Selected Location: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
 
     with st.form("submit_form"):
-        category = st.selectbox("பிரிவு (Category)", ["குடிநீர் வசதி", "சாலைப் பராமரிப்பு", "சுகாதாரம் & குப்பை", "மின்சாரம்", "இதர"])
-        location_name = st.text_input("இடம் / முகவரி")
-        description = st.text_area("புகாரின் விவரம்")
-        if st.form_submit_button("சமர்ப்பி (Submit)", type="primary", use_container_width=True):
+        category = st.selectbox("Category", ["Water Supply & Leakage", "Roads & Potholes", "Garbage & Sanitation", "Electricity", "Other"])
+        location_name = st.text_input("Area / Landmark")
+        description = st.text_area("Complaint Details")
+        if st.form_submit_button("Submit Complaint", type="primary", use_container_width=True):
             if not description.strip():
-                st.error("புகார் விவரங்களை உள்ளிடவும்.")
+                st.error("Please provide complaint details.")
             else:
                 trk_id = f"TRK{random.randint(1000, 9999)}"
                 payload = {
@@ -183,12 +183,12 @@ def render_submit() -> None:
                     "status": "Pending",
                 }
                 save_new_complaint(payload)
-                st.success(f"புகார் பதிவு செய்யப்பட்டது! Tracking ID: **{trk_id}**")
+                st.success(f"Complaint registered successfully! Tracking ID: **{trk_id}**")
 
 
 def render_tracking() -> None:
-    st.title("🔎 புகாரின் நிலையைக் கண்டறிய")
-    tracking_id = st.text_input("Tracking ID உள்ளிடவும்").strip()
+    st.title("🔎 Track Complaint Status")
+    tracking_id = st.text_input("Enter your Tracking ID").strip()
     if tracking_id:
         try:
             rows = fetch_complaints()
@@ -196,19 +196,19 @@ def render_tracking() -> None:
             if matched:
                 for r in matched:
                     st.success(f"Tracking ID: {r['_tracking_id']}")
-                    st.write(f"**நிலை (Status):** {r['_status']}")
-                    st.write(f"**பிரிவு:** {r['_category']}")
-                    st.write(f"**விவரம்:** {r['_description']}")
+                    st.write(f"**Status:** {r['_status']}")
+                    st.write(f"**Category:** {r['_category']}")
+                    st.write(f"**Description:** {r['_description']}")
                     if r["_resolution_notes"]:
-                        st.info(f"**நிர்வாகக் குறிப்பு:** {r['_resolution_notes']}")
+                        st.info(f"**Resolution Notes:** {r['_resolution_notes']}")
             else:
-                st.warning("இந்த Tracking ID-ல் புகார்கள் எதுவும் இல்லை.")
+                st.warning("No complaints found matching that Tracking ID.")
         except Exception as e:
-            st.error(f"பிழை: {e}")
+            st.error(f"Error: {e}")
 
 
 def render_public() -> None:
-    st.title("📋 அனைத்துப் புகார்கள் & வரைபடம்")
+    st.title("📋 All Complaints & Map View")
     try:
         rows = fetch_complaints()
         if rows:
@@ -219,47 +219,133 @@ def render_public() -> None:
                 "Status": r["_status"],
             } for r in rows])
             st.dataframe(df, use_container_width=True, hide_index=True)
-            st.markdown("### 🗺️ புகார்கள் உள்ள இடங்கள்")
+            st.markdown("### 🗺️ Complaint Location Map")
             show_map(rows, height=450)
         else:
-            st.info("புகார்கள் எதுவும் பதிவு செய்யப்படவில்லை.")
+            st.info("No complaints registered yet.")
     except Exception as e:
-        st.error(f"பிழை: {e}")
+        st.error(f"Error: {e}")
 
 
 def render_admin() -> None:
-    # அட்மின் லாகின் செய்யப்படாவிட்டால் மட்டுமே இந்த லாகின் கார்டு வரும்
+    # Exact styled Admin Access matching your image reference
     if not st.session_state.get("mka_admin_authenticated", False):
         st.markdown(
             """
-            <div style="max-width: 440px; margin: 20px auto; padding: 25px; background: rgba(255,255,255,0.95); border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.15); text-align: center;">
-              <div style="font-size: 38px; margin-bottom: 5px;">🔐</div>
-              <h2 style="color:#10213d; font-size:24px; margin-bottom:5px;">Admin Access</h2>
-              <p style="color: #64748b; font-size: 13px;">Enter your 6-digit access key to continue</p>
+            <style>
+              .admin-card {
+                max-width: 540px;
+                margin: 4vh auto 0 auto;
+                background: #ffffff;
+                border-radius: 24px;
+                padding: 35px 40px;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.15);
+                text-align: center;
+              }
+              .admin-logo-area {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 25px;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 15px;
+              }
+              .admin-brand {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-weight: 800;
+                font-size: 18px;
+                color: #0f172a;
+              }
+              .admin-tagline {
+                font-size: 11px;
+                color: #64748b;
+                text-align: right;
+              }
+              .shield-icon {
+                width: 60px;
+                height: 60px;
+                margin: 0 auto 15px auto;
+                background: linear-gradient(135deg, #0ea5e9, #2563eb);
+                border-radius: 16px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-size: 28px;
+                box-shadow: 0 8px 20px rgba(37,99,235,0.3);
+              }
+              .admin-title {
+                font-size: 26px;
+                font-weight: 800;
+                color: #0f172a;
+                margin-bottom: 6px;
+              }
+              .admin-subtitle {
+                font-size: 13px;
+                color: #64748b;
+                margin-bottom: 25px;
+              }
+              /* 6-digit box styling for input */
+              div[data-testid="stTextInput"] input {
+                text-align: center !important;
+                letter-spacing: 0.7em !important;
+                font-size: 24px !important;
+                font-weight: 800 !important;
+                padding: 14px !important;
+                border-radius: 12px !important;
+                border: 1px solid #cbd5e1 !important;
+                background: #f8fafc !important;
+              }
+            </style>
+
+            <div class="admin-card">
+              <div class="admin-logo-area">
+                <div class="admin-brand">
+                  <span style="font-size:22px;">🎙️</span> Makkal Kural AI
+                </div>
+                <div class="admin-tagline">
+                  A Smarter Way to Build<br>a Better Tomorrow
+                </div>
+              </div>
+              <div class="shield-icon">🔒</div>
+              <div class="admin-title">Admin Access</div>
+              <div class="admin-subtitle">Enter the 6-digit access key to continue</div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-        _, center, _ = st.columns([1, 1.2, 1])
+        _, center, _ = st.columns([1, 1.4, 1])
         with center:
             with st.form("admin_auth_form"):
-                code = st.text_input("Access Key", type="password", max_chars=6, placeholder="• • • • • •", label_visibility="collapsed")
+                code = st.text_input(
+                    "6-digit Access Key", 
+                    type="password", 
+                    max_chars=6, 
+                    placeholder="• • • • • •", 
+                    label_visibility="collapsed"
+                )
                 submitted = st.form_submit_button("Confirm →", type="primary", use_container_width=True)
                 if submitted:
-                    if code == ADMIN_ACCESS_KEY or code == "123456": # உங்களுக்குத் தேவையான Key அமைத்துக் கொள்ளலாம்
+                    if code == ADMIN_ACCESS_KEY or code == "123456":
                         st.session_state["mka_admin_authenticated"] = True
                         st.rerun()
                     else:
-                        st.error("தவறான Access Key. மீண்டும் முயலவும்.")
+                        st.error("Incorrect access key. Please try again.")
+            st.markdown(
+                '<p style="text-align: center; color: #94a3b8; font-size: 12px; margin-top: 10px;">🔒 Authorized personnel only</p>', 
+                unsafe_allow_html=True
+            )
         return
 
-    # அட்மின் உள்நுழைந்த பிறகு (Dashboard Analytics)
+    # Authenticated Admin Dashboard Analytics View
     top_col, logout_col = st.columns([5, 1])
     with top_col:
         st.title("🛡️ Admin Dashboard & Analytics")
     with logout_col:
-        if st.button("Log out"):
+        if st.button("Log out", use_container_width=True):
             st.session_state["mka_admin_authenticated"] = False
             st.rerun()
 
@@ -272,14 +358,14 @@ def render_admin() -> None:
 
     # Metrics Row
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total", total)
+    m1.metric("Total Reports", total)
     m2.metric("Pending", pending)
     m3.metric("In Progress", in_progress)
     m4.metric("Resolved", resolved)
-    m5.metric("Resolution", f"{res_rate}%")
+    m5.metric("Resolution Rate", f"{res_rate}%")
 
     st.divider()
-    st.markdown("### 📊 புகார்களின் புள்ளிவிவரங்கள் (Graphs)")
+    st.markdown("### 📊 Complaint Statistics & Graphs")
     if rows:
         df_stats = pd.DataFrame(rows)
         c1, c2 = st.columns(2)
@@ -291,20 +377,20 @@ def render_admin() -> None:
             st.bar_chart(df_stats["_category"].value_counts())
 
     st.divider()
-    st.markdown("### 📋 நிலையை மாற்றுக (Status Update)")
+    st.markdown("### 📋 Complaint Status Management")
     if rows:
         labels = {f"{r['_tracking_id']} · {r['_category']} ({r['_status']})": r for r in rows}
-        selected_key = st.selectbox("புகாரைத் தேர்ந்தெடுக்கவும்", list(labels.keys()))
+        selected_key = st.selectbox("Select Complaint to Update", list(labels.keys()))
         selected = labels[selected_key]
 
         with st.form("update_status_form"):
-            new_status = st.selectbox("புதிய நிலை", STATUSES)
-            notes = st.text_area("குறிப்புகள் (Resolution Notes)", value=selected["_resolution_notes"])
+            new_status = st.selectbox("New Status", STATUSES)
+            notes = st.text_area("Resolution Notes", value=selected["_resolution_notes"])
             if st.form_submit_button("Save Update", type="primary"):
                 update_complaint(selected, new_status, notes)
-                st.success("நிலை வெற்றிகரமாக மாற்றப்பட்டது!")
+                st.success("Complaint status updated successfully!")
                 st.rerun()
 
     st.divider()
-    st.markdown("### 🗺️ நேரலை வரைபடம் (Live Map)")
+    st.markdown("### 🗺️ Live Complaint Map")
     show_map(rows, height=450)
