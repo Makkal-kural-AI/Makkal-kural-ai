@@ -5,34 +5,18 @@ create table if not exists public.complaints (
     category text not null default 'Other',
     location text not null default 'Not provided',
     created_at text not null default '',
-    status text not null default 'Pending',
+    status text not null default 'Submitted',
     source_id text,
     name text,
     description text,
     village text,
     district text,
     latitude double precision,
-    longitude double precision
+    longitude double precision,
+    resolution_note text
 );
-
-create unique index if not exists complaints_source_id_unique
-    on public.complaints (source_id)
-    where source_id is not null;
-
-create table if not exists public.offline_queue (
-    local_id text primary key,
-    complaint_text text not null,
-    category text not null default 'Other',
-    location text not null default 'Not provided',
-    created_at text not null,
-    synced boolean not null default false,
-    tracking_id text unique
-);
-
+create unique index if not exists complaints_source_id_unique on public.complaints(source_id) where source_id is not null;
 alter table public.complaints enable row level security;
-alter table public.offline_queue enable row level security;
-
 grant usage on schema public to service_role;
 grant all privileges on public.complaints to service_role;
-grant all privileges on public.offline_queue to service_role;
 grant usage, select on all sequences in schema public to service_role;
