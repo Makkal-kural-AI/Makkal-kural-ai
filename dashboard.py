@@ -1,15 +1,23 @@
 """
-Makkal Kural AI — Dashboard Logic & Views
+Makkal Kural AI — UI Dashboard Modules
+Exports: render_submit(), render_tracking(), render_public(), render_admin()
+Imports functions from database.py according to project requirements.
 """
 
 from __future__ import annotations
 
 import os
 import random
-from typing import Any
-
 import pandas as pd
 import streamlit as st
+
+# Imports strictly matching database.py function definitions
+from database import (
+    get_all_complaints,
+    get_complaint,
+    save_complaint,
+    update_status,
+)
 
 try:
     import folium
@@ -18,121 +26,35 @@ except ImportError:
     folium = None
     st_folium = None
 
-# Database Integration Setup (database.py / Supabase)
-HAS_LOCAL_DB = False
-try:
-    from database import (
-        fetch_complaints as db_fetch_complaints,
-        insert_complaint as db_insert_complaint,
-        update_complaint_status as db_update_complaint,
-    )
-
-    HAS_LOCAL_DB = True
-except ImportError:
-    pass
-
-try:
-    from supabase import create_client
-except ImportError:
-    create_client = None
-
-
-def get_setting(name: str, default: str = "") -> str:
-    try:
-        value = st.secrets.get(name, None)
-        if value is not None and str(value).strip():
-            return str(value).strip()
-    except Exception:
-        pass
-    return os.getenv(name, default).strip()
-
-
-ADMIN_ACCESS_KEY = get_setting("ADMIN_ACCESS_KEY", "123456")
-SUPABASE_URL = get_setting("SUPABASE_URL")
-SUPABASE_KEY = get_setting("SUPABASE_SERVICE_ROLE_KEY") or get_setting("SUPABASE_KEY")
-TABLE_NAME = get_setting("SUPABASE_TABLE", "complaints")
+ADMIN_ACCESS_KEY = os.getenv("ADMIN_ACCESS_KEY", "123456")
 STATUSES = ["Pending", "In Progress", "Resolved", "Submitted"]
 
 
-def get_supabase_client():
-    if create_client is None or not SUPABASE_URL or not SUPABASE_KEY:
-        return None
+def normalise_record(row: dict) -> dict:
+    """Normalizes field names to guarantee smooth table and map rendering."""
+    lat = row.get("latitude") or row.get("lat")
+    lon = row.get("longitude") or row.get("lng") or row.get("lon")
     try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception:
-        return None
+        lat = float(lat) if lat is not None else None
+        lon = float(lon) if lon is not None else None
+    except (TypeError, ValueError):
+        lat, lon = None, None
+
+    return {
+        **row,
+        "_tracking_id": str(row.get("tracking_id", row.get("id", "N/A"))),
+        "_category": str(row.get("category", "Uncategorized")),
+        "_description": str(row.get("description", "")),
+        "_status": str(row.get("status", "Pending")),
+        "_location": str(row.get("location", "")),
+        "_latitude": lat,
+        "_longitude": lon,
+        "_resolution_notes": str(row.get("resolution_notes", "")),
+    }
 
 
-def fetch_complaints() -> list[dict[str, Any]]:
-    try:
-        if HAS_LOCAL_DB:
-            records = db_fetch_complaints()
-        else:
-            client = get_supabase_client()
-            if client is None:
-                return []
-            response = (
-                client.table(TABLE_NAME)
-                .select("*")
-                .order("created_at", desc=True)
-                .execute()
-            )
-            records = getattr(response, "data", None) or []
-
-        normalized = []
-        for r in records:
-            lat = r.get("latitude") or r.get("lat")
-            lon = r.get("longitude") or r.get("lng") or r.get("lon")
-            try:
-                lat = float(lat) if lat is not None else None
-                lon = float(lon) if lon is not None else None
-            except (TypeError, ValueError):
-                lat, lon = None, None
-
-            normalized.append(
-                {
-                    "_tracking_id": str(
-                        r.get("tracking_id", r.get("id", "N/A"))
-                    ),
-                    "_category": str(r.get("category", "Uncategorized")),
-                    "_description": str(r.get("description", "")),
-                    "_status": str(r.get("status", "Pending")),
-                    "_location": str(r.get("location", "")),
-                    "_latitude": lat,
-                    "_longitude": lon,
-                    "_resolution_notes": str(r.get("resolution_notes", "")),
-                    "_db_id": r.get("id", r.get("tracking_id")),
-                }
-            )
-        return normalized
-    except Exception:
-        return []
-
-
-def save_new_complaint(payload: dict[str, Any]) -> None:
-    if HAS_LOCAL_DB:
-        db_insert_complaint(payload)
-    else:
-        client = get_supabase_client()
-        if client:
-            client.table(TABLE_NAME).insert(payload).execute()
-
-
-def update_status(row: dict[str, Any], new_status: str, notes: str) -> None:
-    if HAS_LOCAL_DB:
-        db_update_complaint(row.get("_db_id"), new_status, notes)
-    else:
-        client = get_supabase_client()
-        if client:
-            key_col = "id" if row.get("id") is not None else "tracking_id"
-            key_val = row.get(key_col)
-            payload = {"status": new_status, "resolution_notes": notes.strip()}
-            client.table(TABLE_NAME).update(payload).eq(
-                key_col, key_val
-            ).execute()
-
-
-def show_map(rows: list[dict[str, Any]], height: int = 450) -> None:
+def show_map(rows: list[dict], height: int = 450) -> None:
+    """Displays Folium map pin markers for complaints with valid latitude/longitude."""
     mappable = [
         r
         for r in rows
@@ -168,37 +90,9 @@ def show_map(rows: list[dict[str, Any]], height: int = 450) -> None:
     )
 
 
-# ----------------------------- VIEW RENDERERS -----------------------------
-
-
-def render_home(go_func) -> None:
-    st.markdown(
-        """
-        <div style="text-align: center; padding: 35px 0 20px; color: white;">
-            <h1 style="font-size: clamp(38px, 6vw, 72px); font-weight: 900;">உங்கள் குரல், உங்கள் ஊர்</h1>
-            <h1 style="font-size: clamp(28px, 4vw, 50px); font-weight: 800;">Your Voice, Your Village</h1>
-            <p style="font-size: clamp(18px, 2vw, 25px);">Report local problems. Track progress. Build better communities.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    a, b, c = st.columns(3)
-    with a:
-        if st.button("📝 Submit a complaint", use_container_width=True):
-            go_func("Submit Complaint")
-    with b:
-        if st.button("🔎 Track a complaint", use_container_width=True):
-            go_func("Tracking")
-    with c:
-        if st.button("🔐 Admin dashboard", use_container_width=True):
-            go_func("Admin Dashboard")
-
-
 def render_submit() -> None:
     st.title("📝 Submit a Complaint")
-    st.caption(
-        "Enter category, description, village/area, and pick map location."
-    )
+    st.caption("Select your location on the map and fill in the issue details.")
 
     default_lat, default_lon = 13.0827, 80.2707
     selected_lat, selected_lon = None, None
@@ -213,7 +107,7 @@ def render_submit() -> None:
             selected_lat = map_data["last_clicked"]["lat"]
             selected_lon = map_data["last_clicked"]["lng"]
             st.success(
-                f"Selected Location: Lat {selected_lat:.5f}, Lon"
+                f"Selected Coordinates: Lat {selected_lat:.5f}, Lon"
                 f" {selected_lon:.5f}"
             )
 
@@ -229,7 +123,7 @@ def render_submit() -> None:
                 "Other",
             ],
         )
-        location_name = st.text_input("Village / Area / Landmark")
+        location_name = st.text_input("Village / Area Name")
         description = st.text_area("Complaint Details")
         if st.form_submit_button(
             "Submit Complaint", type="primary", use_container_width=True
@@ -247,48 +141,47 @@ def render_submit() -> None:
                     "longitude": selected_lon,
                     "status": "Submitted",
                 }
-                save_new_complaint(payload)
-                st.success(
-                    "Complaint registered successfully! Tracking ID:"
-                    f" **{trk_id}**"
-                )
+                if save_complaint(payload):
+                    st.success(
+                        "Complaint registered successfully! Tracking ID:"
+                        f" **{trk_id}**"
+                    )
 
 
 def render_tracking() -> None:
     st.title("🔎 Track Complaint Status")
     tracking_id = st.text_input("Enter your Tracking ID").strip()
     if tracking_id:
-        rows = fetch_complaints()
-        matched = [
-            r
-            for r in rows
-            if tracking_id.lower() in r["_tracking_id"].lower()
-        ]
-        if matched:
-            for r in matched:
+        records = get_complaint(tracking_id)
+        if records:
+            for item in records:
+                r = normalise_record(item)
                 st.success(f"Tracking ID: {r['_tracking_id']}")
                 st.write(f"**Status:** {r['_status']}")
                 st.write(f"**Category:** {r['_category']}")
+                st.write(f"**Location:** {r['_location']}")
                 st.write(f"**Description:** {r['_description']}")
                 if r["_resolution_notes"]:
                     st.info(f"**Resolution Notes:** {r['_resolution_notes']}")
         else:
-            st.warning("No complaints found matching that Tracking ID.")
+            st.warning("No complaint found matching that Tracking ID.")
 
 
 def render_public() -> None:
     st.title("📋 All Complaints & Map View")
     with st.sidebar:
         st.markdown("### 🔍 Filters")
-        status_filter = st.selectbox("Status Filter", ["All"] + STATUSES)
+        status_filter = st.selectbox("Filter Status", ["All"] + STATUSES)
 
-    rows = fetch_complaints()
+    raw_records = get_all_complaints()
+    records = [normalise_record(item) for item in raw_records]
+
     if status_filter != "All":
-        rows = [
-            r for r in rows if r["_status"].lower() == status_filter.lower()
+        records = [
+            r for r in records if r["_status"].lower() == status_filter.lower()
         ]
 
-    if rows:
+    if records:
         df = pd.DataFrame([
             {
                 "Tracking ID": r["_tracking_id"],
@@ -296,13 +189,13 @@ def render_public() -> None:
                 "Location": r["_location"] or "Not provided",
                 "Status": r["_status"],
             }
-            for r in rows
+            for r in records
         ])
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.markdown("### 🗺️ Complaint Map Pins")
-        show_map(rows, height=450)
+        st.markdown("### 🗺️ Complaint Location Map")
+        show_map(records, height=450)
     else:
-        st.info("No complaints registered yet.")
+        st.info("No complaints found.")
 
 
 def render_admin() -> None:
@@ -345,7 +238,7 @@ def render_admin() -> None:
                         st.error("Incorrect access key.")
         return
 
-    # Authenticated Admin Console View
+    # Authenticated Admin Dashboard & Analytics View
     top_col, logout_col = st.columns([5, 1])
     with top_col:
         st.title("🛡️ Admin Dashboard & Analytics")
@@ -354,7 +247,9 @@ def render_admin() -> None:
             st.session_state["mka_admin_authenticated"] = False
             st.rerun()
 
-    rows = fetch_complaints()
+    raw_records = get_all_complaints()
+    rows = [normalise_record(item) for item in raw_records]
+
     total = len(rows)
     pending = sum(
         1
@@ -406,9 +301,9 @@ def render_admin() -> None:
                 "Resolution Notes", value=selected["_resolution_notes"]
             )
             if st.form_submit_button("Save Update", type="primary"):
-                update_status(selected, new_status, notes)
-                st.success("Status updated and saved to Supabase successfully!")
-                st.rerun()
+                if update_status(selected["_tracking_id"], new_status, notes):
+                    st.success("Status updated and saved successfully!")
+                    st.rerun()
 
     st.divider()
     st.markdown("### 🗺️ Live Complaint Map")
