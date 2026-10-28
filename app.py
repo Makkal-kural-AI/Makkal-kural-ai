@@ -1,6 +1,6 @@
 """
 Makkal Kural AI — Main Entry Point
-Calls render_submit(), render_tracking(), render_public(), and render_admin() from dashboard.py depending on selected page.
+Calls render_submit(), render_tracking(), render_public(), and render_admin() from dashboard.py depending on selected page[cite: 7].
 """
 
 import streamlit as st
@@ -67,7 +67,7 @@ with nav:
             if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
                 go(page_name)
 
-# Page Router calling functions exported from dashboard.py
+# Page Router calling functions exported from dashboard.py[cite: 7]
 if st.session_state.page == "Home":
     st.markdown(
         """
