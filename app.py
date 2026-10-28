@@ -1,14 +1,3 @@
-"""
-Makkal Kural AI — Main Streamlit Entrypoint (app.py)
------------------------------------------------------
-Routes user navigation between:
-- Home (Hero banner & quick actions)
-- Submit Complaint (Interactive map picker & form)
-- Tracking (Lookup by tracking ID)
-- All Complaints (Public grievances list & map)
-- Admin Dashboard (6-digit PIN verification & analytics)
-"""
-
 import streamlit as st
 from dashboard import (
     render_admin,
@@ -33,7 +22,7 @@ def go(page: str):
     st.rerun()
 
 
-# Custom styling for background imagery, headers, and navigation
+# Custom UI CSS
 st.markdown(
     """
     <style>
@@ -46,44 +35,20 @@ st.markdown(
     }
     [data-testid='stHeader'] { background: transparent; }
     [data-testid='stMainBlockContainer'] { max-width: 1250px; padding-top: 1.4rem; }
-    .brand {
-        font-size: clamp(25px, 3vw, 40px);
-        font-weight: 900;
-        color: white;
-        text-shadow: 0 2px 8px #000;
-    }
-    .hero {
-        text-align: center;
-        padding: 35px 0 20px;
-        color: white;
-    }
-    .hero h1 {
-        font-size: clamp(38px, 6vw, 72px);
-        font-weight: 900;
-        color: white;
-    }
-    .hero p {
-        font-size: clamp(18px, 2vw, 25px);
-        color: white;
-    }
+    .brand { font-size: clamp(25px, 3vw, 40px); font-weight: 900; color: white; text-shadow: 0 2px 8px #000; }
+    .hero { text-align: center; padding: 35px 0 20px; color: white; }
+    .hero h1 { font-size: clamp(38px, 6vw, 72px); font-weight: 900; color: white; }
+    .hero p { font-size: clamp(18px, 2vw, 25px); color: white; }
     .stButton>button {
-        min-height: 48px;
-        border-radius: 12px;
-        font-weight: 800;
-        background: #073e70;
-        color: white;
-        border: 1px solid #c5e4ff;
+        min-height: 48px; border-radius: 12px; font-weight: 800; background: #073e70; color: white; border: 1px solid #c5e4ff;
     }
-    .stButton>button:hover {
-        background: #0877ce;
-        color: white;
-    }
+    .stButton>button:hover { background: #0877ce; color: white; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Top Navigation Bar
+# Header Navigation
 brand, nav = st.columns([2, 5], vertical_alignment="center")
 with brand:
     st.markdown('<div class="brand">📢 Makkal Kural AI</div>', unsafe_allow_html=True)
@@ -102,7 +67,7 @@ with nav:
             if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
                 go(page_name)
 
-# Page Routing Logic
+# Page Routing
 if st.session_state.page == "Home":
     st.markdown(
         """
