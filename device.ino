@@ -3,10 +3,12 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <driver/i2s.h>
-#include <ESP8266Audio.h>
-// --- Wi-Fi Credentials ---
-const char* ssid = "Redmi 13 5g";
-const char* password = "password";
+#include <Audio.h>          // Provided by ESP32-audioI2S library
+#include "secrets.h"        // Secure Wi-Fi credentials
+
+// --- Wi-Fi Credentials from secrets.h ---
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 // --- Server Endpoint ---
 const char* serverUrl = "https://makkal-kural-ai.onrender.com/upload_audio"; 
@@ -59,9 +61,9 @@ void setupMicI2S() {
 
 void showStartupScreen() {
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB08_tr); // Fixed font name
+  u8g2.setFont(u8g2_font_ncenB08_tr);
   u8g2.drawStr(12, 12, "MAKKAL KURAL AI");
-  u8g2.setFont(u8g2_font_ncenB10_tr); // Fixed font name
+  u8g2.setFont(u8g2_font_ncenB10_tr);
   u8g2.drawStr(10, 35, "Press to Speak");
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.drawStr(5, 58, "Your Voice - Priority");
@@ -71,15 +73,13 @@ void showStartupScreen() {
 void triggerGrievanceRecording() {
   Serial.println("Recording grievance...");
   
-  // Display Listening Status
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB10_tr); // Fixed font name
+  u8g2.setFont(u8g2_font_ncenB10_tr);
   u8g2.drawStr(20, 25, "Listening...");
   u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.drawStr(15, 45, "Speak Now / Pesungal");
   u8g2.sendBuffer();
 
-  // Record audio buffer for 5 seconds
   unsigned long startTime = millis();
   const size_t bufferSize = 1024;
   uint8_t readBuffer[bufferSize];
@@ -100,11 +100,10 @@ void triggerGrievanceRecording() {
   Serial.println("Recording finished. Sending to server...");
   
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB10_tr); // Fixed font name
+  u8g2.setFont(u8g2_font_ncenB10_tr);
   u8g2.drawStr(10, 35, "Processing AI...");
   u8g2.sendBuffer();
 
-  // Send Audio Data via HTTP POST to Render backend
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     http.begin(serverUrl);
@@ -117,7 +116,7 @@ void triggerGrievanceRecording() {
       Serial.println("Complaint processed successfully!");
       
       u8g2.clearBuffer();
-      u8g2.setFont(u8g2_font_ncenB10_tr); // Fixed font name
+      u8g2.setFont(u8g2_font_ncenB10_tr);
       u8g2.drawStr(5, 25, "Complaint Saved!");
       u8g2.drawStr(15, 45, "Playing Audio...");
       u8g2.sendBuffer();
@@ -133,7 +132,7 @@ void triggerGrievanceRecording() {
       Serial.println(httpResponseCode);
       
       u8g2.clearBuffer();
-      u8g2.setFont(u8g2_font_ncenB10_tr); // Fixed font name
+      u8g2.setFont(u8g2_font_ncenB10_tr);
       u8g2.drawStr(10, 35, "Upload Failed!");
       u8g2.sendBuffer();
     }
@@ -150,15 +149,13 @@ void setup() {
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Initialize U8g2 OLED Display
   u8g2.begin();
   
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB08_tr); // Fixed font name
+  u8g2.setFont(u8g2_font_ncenB08_tr);
   u8g2.drawStr(15, 30, "Connecting WiFi...");
   u8g2.sendBuffer();
 
-  // Connect to Wi-Fi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -167,19 +164,18 @@ void setup() {
 
   Serial.println("\nWiFi connected.");
   
-  // Setup Microphone & Speaker Audio Output
   setupMicI2S();
   audio.setPinout(I2S_AMP_BCLK, I2S_AMP_LRC, I2S_AMP_DIN);
-  audio.setVolume(21); // Set speaker volume (0 to 21)
+  audio.setVolume(21); 
 
   showStartupScreen();
 }
 
 void loop() {
-  audio.loop(); // Required continuously for the Audio library stream handler
+  audio.loop(); 
 
   if (digitalRead(BUTTON_PIN) == LOW) {
-    delay(50); // Debounce
+    delay(50); 
     if (digitalRead(BUTTON_PIN) == LOW) {
       triggerGrievanceRecording();
     }
