@@ -6,7 +6,7 @@
 #include <ESP8266Audio.h>
 // --- Wi-Fi Credentials ---
 const char* ssid = "Redmi 13 5g";
-const char* password = "12042008";
+const char* password = "password";
 
 // --- Server Endpoint ---
 const char* serverUrl = "https://makkal-kural-ai.onrender.com/upload_audio"; 
