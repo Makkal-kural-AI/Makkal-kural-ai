@@ -168,11 +168,13 @@ body {
 
 <script>
 
+
 const inputs = [...document.querySelectorAll(".otp-container input")];
 const button = document.getElementById("confirm");
 
 let disabled = false;
 
+// Send normal component messages
 function sendMessage(type, value) {
     window.parent.postMessage({
         isStreamlitMessage: true,
@@ -181,11 +183,27 @@ function sendMessage(type, value) {
     }, "*");
 }
 
+// IMPORTANT: apiVersion must be at the top level
+function connectToStreamlit() {
+    window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:componentReady",
+        apiVersion: 1
+    }, "*");
+
+    // Set component height
+    window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:setFrameHeight",
+        height: 340
+    }, "*");
+}
+
 function getCode() {
     return inputs.map(input => input.value).join("");
 }
 
-// Automatically move to the next box
+// Automatic focus movement
 inputs.forEach((input, index) => {
 
     input.addEventListener("input", () => {
@@ -198,14 +216,16 @@ inputs.forEach((input, index) => {
 
     });
 
-    // Backspace navigation
+    // Backspace
     input.addEventListener("keydown", event => {
 
-        if (event.key === "Backspace" && !input.value && index > 0) {
-
-            inputs[index - 1].focus();
+        if (
+            event.key === "Backspace" &&
+            !input.value &&
+            index > 0
+        ) {
             inputs[index - 1].value = "";
-
+            inputs[index - 1].focus();
             event.preventDefault();
         }
 
@@ -216,7 +236,7 @@ inputs.forEach((input, index) => {
 
     });
 
-    // Paste all six digits
+    // Paste six digits
     input.addEventListener("paste", event => {
 
         event.preventDefault();
@@ -236,19 +256,22 @@ inputs.forEach((input, index) => {
 
 });
 
+// Submit OTP to Python
 function submitCode() {
 
     if (disabled) return;
 
     const code = getCode();
 
-    sendMessage(
-        "streamlit:setComponentValue",
-        {
-            code: code,
-            submitted: true
-        }
-    );
+    if (code.length !== 6) {
+        inputs.find(input => !input.value)?.focus();
+        return;
+    }
+
+    sendMessage("streamlit:setComponentValue", {
+        code: code,
+        submitted: true
+    });
 
 }
 
@@ -261,7 +284,9 @@ window.addEventListener("message", event => {
 
     if (data && data.type === "streamlit:render") {
 
-        disabled = Boolean(data.args && data.args.disabled);
+        disabled = Boolean(
+            data.args && data.args.disabled
+        );
 
         inputs.forEach(input => {
             input.disabled = disabled;
@@ -273,12 +298,8 @@ window.addEventListener("message", event => {
 
 });
 
-// Connect component to Streamlit
-sendMessage("streamlit:componentReady", {
-    apiVersion: 1
-});
-
-sendMessage("streamlit:setFrameHeight", 340);
+// Connect
+connectToStreamlit();
 
 </script>
 
