@@ -1,0 +1,286 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: Arial, sans-serif;
+    background: transparent;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 440px;
+    margin: 0 auto;
+    padding: 28px 28px 20px;
+    background: rgba(255,255,255,0.97);
+    border-radius: 16px;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.30);
+    text-align: center;
+}
+
+.shield {
+    font-size: 42px;
+    margin-bottom: 8px;
+}
+
+.title {
+    font-size: 23px;
+    font-weight: 800;
+    color: #10233b;
+    margin-bottom: 8px;
+}
+
+.subtitle {
+    font-size: 13px;
+    color: #64748b;
+    margin-bottom: 25px;
+}
+
+.otp-container {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+}
+
+.otp-container input {
+    width: 100%;
+    min-width: 0;
+    height: 48px;
+    border: 1.5px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #10233b;
+    text-align: center;
+    font-size: 23px;
+    font-weight: bold;
+    outline: none;
+}
+
+.otp-container input:focus {
+    border: 2px solid #2478d4;
+    box-shadow: 0 0 0 3px rgba(36,120,212,0.13);
+}
+
+.otp-container input:disabled {
+    background: #f1f4f8;
+    color: #94a3b8;
+}
+
+.confirm-btn {
+    width: 100%;
+    height: 49px;
+    margin-top: 20px;
+    border: none;
+    border-radius: 9px;
+    background: #2478d4;
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.confirm-btn:hover {
+    background: #1d63b5;
+}
+
+.confirm-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.footer {
+    margin-top: 20px;
+    font-size: 12px;
+    color: #64748b;
+}
+
+@media(max-width: 400px) {
+    .login-card {
+        padding: 22px 14px;
+    }
+
+    .otp-container {
+        gap: 5px;
+    }
+
+    .otp-container input {
+        height: 43px;
+        font-size: 20px;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div class="login-card">
+
+    <div class="shield">🛡️</div>
+
+    <div class="title">Admin Access</div>
+
+    <div class="subtitle">
+        Enter the 6-digit access key to continue
+    </div>
+
+    <div class="otp-container" id="otpBoxes">
+
+        <input type="text" inputmode="numeric"
+               maxlength="1" autocomplete="one-time-code"
+               aria-label="Digit 1">
+
+        <input type="text" inputmode="numeric"
+               maxlength="1" aria-label="Digit 2">
+
+        <input type="text" inputmode="numeric"
+               maxlength="1" aria-label="Digit 3">
+
+        <input type="text" inputmode="numeric"
+               maxlength="1" aria-label="Digit 4">
+
+        <input type="text" inputmode="numeric"
+               maxlength="1" aria-label="Digit 5">
+
+        <input type="text" inputmode="numeric"
+               maxlength="1" aria-label="Digit 6">
+
+    </div>
+
+    <button class="confirm-btn" id="confirm">
+        Confirm →
+    </button>
+
+    <div class="footer">
+        🔒 Authorized personnel only
+    </div>
+
+</div>
+
+<script>
+
+const inputs = [...document.querySelectorAll(".otp-container input")];
+const button = document.getElementById("confirm");
+
+let disabled = false;
+
+function sendMessage(type, value) {
+    window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: type,
+        value: value
+    }, "*");
+}
+
+function getCode() {
+    return inputs.map(input => input.value).join("");
+}
+
+// Automatically move to the next box
+inputs.forEach((input, index) => {
+
+    input.addEventListener("input", () => {
+
+        input.value = input.value.replace(/\D/g, "").slice(-1);
+
+        if (input.value && index < 5) {
+            inputs[index + 1].focus();
+        }
+
+    });
+
+    // Backspace navigation
+    input.addEventListener("keydown", event => {
+
+        if (event.key === "Backspace" && !input.value && index > 0) {
+
+            inputs[index - 1].focus();
+            inputs[index - 1].value = "";
+
+            event.preventDefault();
+        }
+
+        if (event.key === "Enter") {
+            event.preventDefault();
+            submitCode();
+        }
+
+    });
+
+    // Paste all six digits
+    input.addEventListener("paste", event => {
+
+        event.preventDefault();
+
+        const pasted = event.clipboardData
+            .getData("text")
+            .replace(/\D/g, "")
+            .slice(0, 6);
+
+        pasted.split("").forEach((digit, i) => {
+            inputs[i].value = digit;
+        });
+
+        inputs[Math.min(pasted.length, 5)].focus();
+
+    });
+
+});
+
+function submitCode() {
+
+    if (disabled) return;
+
+    const code = getCode();
+
+    sendMessage(
+        "streamlit:setComponentValue",
+        {
+            code: code,
+            submitted: true
+        }
+    );
+
+}
+
+button.addEventListener("click", submitCode);
+
+// Receive Streamlit configuration
+window.addEventListener("message", event => {
+
+    const data = event.data;
+
+    if (data && data.type === "streamlit:render") {
+
+        disabled = Boolean(data.args && data.args.disabled);
+
+        inputs.forEach(input => {
+            input.disabled = disabled;
+        });
+
+        button.disabled = disabled;
+
+    }
+
+});
+
+// Connect component to Streamlit
+sendMessage("streamlit:componentReady", {
+    apiVersion: 1
+});
+
+sendMessage("streamlit:setFrameHeight", 340);
+
+</script>
+
+</body>
+</html>
