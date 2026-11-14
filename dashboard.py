@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import streamlit as st
-
+from custom_otp_component import otp_input
 from database import (
     database_configured,
     fetch_complaints,
@@ -386,30 +386,63 @@ _BASE_CSS = """
 </style>
 """
 
+
 _LOGIN_CSS = """
 <style>
-.st-key-mka_login_scene{background:rgba(7,27,51,.10);border:1px solid rgba(255,255,255,.25);
-  border-radius:16px;padding:34px 12px 42px;min-height:470px;display:flex;align-items:center}
-.mka-panel-title{background:linear-gradient(100deg,#102c4b,#183b5d);border:1px solid rgba(255,255,255,.2);
-  border-radius:12px;padding:15px 24px;margin:0 0 14px;min-height:58px}
-div[data-testid="stForm"]{background:rgba(255,255,255,.97);border:1px solid rgba(255,255,255,.8);
-  border-radius:14px;padding:22px 24px 16px;box-shadow:0 18px 44px rgba(0,0,0,.28);color:#0f172a}
-.mka-login-head{text-align:center;color:#0f172a;background:transparent;border-radius:10px;padding:4px 0 14px;margin-bottom:6px}
-.mka-login-head .shield{font-size:38px;line-height:1}
-.mka-login-head .t{font-size:22px;font-weight:800;margin-top:7px}
-.mka-login-head .s{font-size:12px;color:#64748b;margin-top:4px}
-.mka-login-foot{text-align:center;color:#64748b;background:transparent;border-radius:8px;font-size:11px;margin-top:10px}
-div[data-testid="stForm"] [data-testid="stTextInput"] input{height:48px;min-height:48px;text-align:center;
-  padding:0;font-size:23px;font-weight:800;letter-spacing:0;border-radius:8px;background:#fff;color:#0f172a;
-  border:1.5px solid #d5dce5;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-div[data-testid="stForm"] [data-testid="stTextInput"] input:focus{border:2px solid #2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.12)}
-div[data-testid="stForm"] [data-testid="stWidgetLabel"]{display:none}
-div[data-testid="stFormSubmitButton"] button{background:#2478d4 !important;color:#fff !important;border:0 !important;
-  border-radius:9px !important;font-weight:700 !important;min-height:46px;width:100%}
-div[data-testid="stFormSubmitButton"] button:hover{background:#1d63b5 !important}
-@media(max-width:600px){.st-key-mka_login_scene{padding:22px 5px;min-height:390px}div[data-testid="stForm"]{padding:18px 12px}}
+
+/* Sunset background area */
+.st-key-mka_login_scene {
+    background:
+        linear-gradient(
+            rgba(8, 27, 48, 0.10),
+            rgba(8, 27, 48, 0.20)
+        ),
+        url("https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1800&q=85");
+
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 16px;
+
+    padding: 34px 16px;
+    min-height: 420px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Admin heading */
+.mka-panel-title {
+    background: linear-gradient(
+        100deg,
+        #092b49,
+        #173b5c
+    );
+
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 12px;
+
+    padding: 15px 24px;
+    margin: 0 0 14px;
+    min-height: 58px;
+}
+
+/* Responsive */
+@media(max-width: 600px) {
+
+    .st-key-mka_login_scene {
+        padding: 20px 8px;
+        min-height: 380px;
+    }
+
+}
+
 </style>
 """
+
 
 
 def _inject(*css: str) -> None:
@@ -630,79 +663,140 @@ def _keys_match(supplied: str, expected: str) -> bool:
     return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
 
+
 def _render_admin_login() -> None:
+
     _inject(_BASE_CSS, _LOGIN_CSS)
 
     now = time.time()
-    if st.session_state["mka_lockout_until"] and now >= st.session_state["mka_lockout_until"]:
+
+    # Reset lockout after timeout
+    if (
+        st.session_state["mka_lockout_until"]
+        and now >= st.session_state["mka_lockout_until"]
+    ):
         st.session_state["mka_lockout_until"] = 0.0
         st.session_state["mka_failed_attempts"] = 0
+
     locked = now < st.session_state["mka_lockout_until"]
-    remaining = int(math.ceil(st.session_state["mka_lockout_until"] - now)) if locked else 0
 
-    # Read at request time from secrets / environment; never hard-coded.
-    expected = get_setting("ADMIN_ACCESS_KEY")
-    configured = len(expected) == 6 and expected.isdigit()
-    disabled = locked or not configured
-
-    badge = "Locked" if locked else ("Not configured" if not configured else "Awaiting Key")
-    st.markdown(
-        _panel_title("🔒", "Admin Verification", badge, "locked" if disabled else ""),
-        unsafe_allow_html=True,
+    remaining = (
+        int(math.ceil(
+            st.session_state["mka_lockout_until"] - now
+        ))
+        if locked else 0
     )
 
+    # Read key securely on Python server
+    expected = get_setting("ADMIN_ACCESS_KEY")
+
+    configured = (
+        len(expected) == 6
+        and expected.isdigit()
+    )
+
+    disabled = locked or not configured
+
+    badge = (
+        "Locked" if locked
+        else "Not configured" if not configured
+        else "Awaiting Key"
+    )
+
+    st.markdown(
+        _panel_title(
+            "🔒",
+            "Admin Verification",
+            badge,
+            "locked" if disabled else ""
+        ),
+        unsafe_allow_html=True
+    )
+
+    # Sunset background
     with st.container(key="mka_login_scene"):
-        _, middle, _ = st.columns([1, 2, 1])
-        with middle:
-            with st.form("admin_auth_form", clear_on_submit=True):
-                st.markdown(
-                    '<div class="mka-login-head"><div class="shield">🛡️</div>'
-                    '<div class="t">Admin Access</div>'
-                    '<div class="s">Enter the 6-digit access key to continue</div></div>',
-                    unsafe_allow_html=True,
-                )
-                otp_cols = st.columns(6, gap="small")
-                digits = []
-                for index, col in enumerate(otp_cols, start=1):
-                    with col:
-                        digits.append(st.text_input(
-                            f"Digit {index}", max_chars=1, placeholder=" ",
-                            label_visibility="collapsed", disabled=disabled,
-                            key=f"mka_admin_otp_{index}",
-                        ))
-                code = "".join(digits)
-                submitted = st.form_submit_button("Confirm  →", use_container_width=True, disabled=disabled)
-                st.markdown('<div class="mka-login-foot">🔒 Authorized personnel only</div>', unsafe_allow_html=True)
 
-    if not configured:
-        st.error(
-            "Admin access is not configured. Set ADMIN_ACCESS_KEY to a six-digit number "
-            "in the server environment or Streamlit secrets."
+        # Change component key after a failed attempt
+        component_key = (
+            "mka_admin_otp_component_"
+            f"{st.session_state['mka_failed_attempts']}"
         )
+
+        result = otp_input(
+            disabled=disabled,
+            key=component_key
+        )
+
+    # Configuration check
+    if not configured:
+
+        st.error(
+            "Admin access is not configured. "
+            "Set ADMIN_ACCESS_KEY to a six-digit number "
+            "in Render environment variables or "
+            "Streamlit secrets."
+        )
+
         return
+
+    # Lockout check
     if locked:
-        st.error(f"Too many incorrect attempts. Try again in {remaining} seconds.")
-        return
-    if not submitted:
+
+        st.error(
+            f"Too many incorrect attempts. "
+            f"Try again in {remaining} seconds."
+        )
+
         return
 
-    code = (code or "").strip()
+    # Wait for Confirm
+    if not isinstance(result, dict) or not result.get("submitted"):
+        return
+
+    code = str(result.get("code", "")).strip()
+
+    # Validate code
     if len(code) != 6 or not code.isdigit():
-        st.warning("Enter all 6 digits of the access key.")
-    elif _keys_match(code, expected):
-        st.session_state["mka_admin_authenticated"] = True
-        st.session_state["mka_failed_attempts"] = 0
-        st.session_state["mka_lockout_until"] = 0.0
-        st.rerun()
-    else:
-        st.session_state["mka_failed_attempts"] += 1
-        attempts = st.session_state["mka_failed_attempts"]
-        if attempts >= MAX_FAILED_ATTEMPTS:
-            st.session_state["mka_lockout_until"] = time.time() + LOCKOUT_SECONDS
-            st.error(f"Maximum attempts exceeded. Locked for {LOCKOUT_SECONDS} seconds.")
-        else:
-            st.error(f"Incorrect access key. ({attempts}/{MAX_FAILED_ATTEMPTS} failed attempts)")
 
+        st.warning(
+            "Please enter all 6 digits of the access key."
+        )
+
+    elif _keys_match(code, expected):
+
+        # Successful authentication
+        st.session_state["mka_admin_authenticated"] = True
+
+        st.session_state["mka_failed_attempts"] = 0
+
+        st.session_state["mka_lockout_until"] = 0.0
+
+        st.rerun()
+
+    else:
+
+        # Incorrect key
+        st.session_state["mka_failed_attempts"] += 1
+
+        attempts = st.session_state["mka_failed_attempts"]
+
+        if attempts >= MAX_FAILED_ATTEMPTS:
+
+            st.session_state["mka_lockout_until"] = (
+                time.time() + LOCKOUT_SECONDS
+            )
+
+            st.error(
+                f"Maximum attempts exceeded. "
+                f"Locked for {LOCKOUT_SECONDS} seconds."
+            )
+
+        else:
+
+            st.error(
+                f"Incorrect access key. "
+                f"({attempts}/{MAX_FAILED_ATTEMPTS} failed attempts)"
+            )
 
 # --------------------------------------------------------------------------
 # Admin dashboard
