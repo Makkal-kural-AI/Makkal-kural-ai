@@ -388,22 +388,26 @@ _BASE_CSS = """
 
 _LOGIN_CSS = """
 <style>
-.st-key-mka_login_scene{
-  background:linear-gradient(180deg,#f7c777 0%,#f29a52 28%,#c9695b 52%,#5b5a86 72%,#2b3a5c 100%);
-  border:1px solid rgba(255,255,255,.35);border-radius:16px;padding:34px 12px}
-div[data-testid="stForm"]{background:#fff;border:0;border-radius:14px;padding:22px 24px 16px;
-  box-shadow:0 18px 44px rgba(0,0,0,.35);color:#0f172a}
-.mka-login-head{text-align:center;color:#0f172a;background:#fff;border-radius:10px;padding:4px 0;margin-bottom:6px}
-.mka-login-head .shield{font-size:34px;line-height:1}
-.mka-login-head .t{font-size:20px;font-weight:800;margin-top:4px}
-.mka-login-head .s{font-size:12px;color:#64748b;margin-top:2px}
-.mka-login-foot{text-align:center;color:#64748b;background:#fff;border-radius:8px;font-size:11px;margin-top:6px}
-div[data-testid="stForm"] [data-testid="stTextInput"] input{text-align:center;letter-spacing:.7em;font-size:24px;font-weight:800;
-  border-radius:10px;background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1}
-div[data-testid="stForm"] button[kind="secondaryFormSubmit"],div[data-testid="stForm"] button[kind="primaryFormSubmit"],
-div[data-testid="stFormSubmitButton"] button{background:#2563eb !important;color:#fff !important;border:0 !important;
-  border-radius:10px !important;font-weight:700 !important;min-height:46px}
-div[data-testid="stFormSubmitButton"] button:hover{background:#1d4ed8 !important}
+.st-key-mka_login_scene{background:rgba(7,27,51,.10);border:1px solid rgba(255,255,255,.25);
+  border-radius:16px;padding:34px 12px 42px;min-height:470px;display:flex;align-items:center}
+.mka-panel-title{background:linear-gradient(100deg,#102c4b,#183b5d);border:1px solid rgba(255,255,255,.2);
+  border-radius:12px;padding:15px 24px;margin:0 0 14px;min-height:58px}
+div[data-testid="stForm"]{background:rgba(255,255,255,.97);border:1px solid rgba(255,255,255,.8);
+  border-radius:14px;padding:22px 24px 16px;box-shadow:0 18px 44px rgba(0,0,0,.28);color:#0f172a}
+.mka-login-head{text-align:center;color:#0f172a;background:transparent;border-radius:10px;padding:4px 0 14px;margin-bottom:6px}
+.mka-login-head .shield{font-size:38px;line-height:1}
+.mka-login-head .t{font-size:22px;font-weight:800;margin-top:7px}
+.mka-login-head .s{font-size:12px;color:#64748b;margin-top:4px}
+.mka-login-foot{text-align:center;color:#64748b;background:transparent;border-radius:8px;font-size:11px;margin-top:10px}
+div[data-testid="stForm"] [data-testid="stTextInput"] input{height:48px;min-height:48px;text-align:center;
+  padding:0;font-size:23px;font-weight:800;letter-spacing:0;border-radius:8px;background:#fff;color:#0f172a;
+  border:1.5px solid #d5dce5;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+div[data-testid="stForm"] [data-testid="stTextInput"] input:focus{border:2px solid #2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.12)}
+div[data-testid="stForm"] [data-testid="stWidgetLabel"]{display:none}
+div[data-testid="stFormSubmitButton"] button{background:#2478d4 !important;color:#fff !important;border:0 !important;
+  border-radius:9px !important;font-weight:700 !important;min-height:46px;width:100%}
+div[data-testid="stFormSubmitButton"] button:hover{background:#1d63b5 !important}
+@media(max-width:600px){.st-key-mka_login_scene{padding:22px 5px;min-height:390px}div[data-testid="stForm"]{padding:18px 12px}}
 </style>
 """
 
@@ -657,15 +661,17 @@ def _render_admin_login() -> None:
                     '<div class="s">Enter the 6-digit access key to continue</div></div>',
                     unsafe_allow_html=True,
                 )
-                code = st.text_input(
-                    "Access Key",
-                    type="password",
-                    max_chars=6,
-                    placeholder="••••••",
-                    label_visibility="collapsed",
-                    disabled=disabled,
-                )
-                submitted = st.form_submit_button("Confirm →", use_container_width=True, disabled=disabled)
+                otp_cols = st.columns(6, gap="small")
+                digits = []
+                for index, col in enumerate(otp_cols, start=1):
+                    with col:
+                        digits.append(st.text_input(
+                            f"Digit {index}", max_chars=1, placeholder=" ",
+                            label_visibility="collapsed", disabled=disabled,
+                            key=f"mka_admin_otp_{index}",
+                        ))
+                code = "".join(digits)
+                submitted = st.form_submit_button("Confirm  →", use_container_width=True, disabled=disabled)
                 st.markdown('<div class="mka-login-foot">🔒 Authorized personnel only</div>', unsafe_allow_html=True)
 
     if not configured:
