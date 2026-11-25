@@ -87,7 +87,7 @@ _PROGRESS = {"in progress", "in-progress", "inprogress", "ongoing"}
 _RESOLVED = {"resolved", "closed", "completed"}
 
 BUCKET_COLORS = {
-    "Pending": "red",
+    "Pending": "#2563eb",
     "In Progress": "orange",
     "Resolved": "green",
     "Other": "gray",
@@ -460,7 +460,7 @@ _BASE_CSS = """
 .mka-kpi{background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:4px}
 .mka-kpi span{font-size:13px;color:#475569}
 .mka-kpi b{font-size:34px;line-height:1.1;color:#0f172a}
-.mka-kpi.pending{background:#fde4e4}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
+.mka-kpi.pending{background:#dbeafe}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
 .mka-kpi.donut{flex-direction:row;align-items:center;gap:12px}
 .mka-kpi.donut div{display:flex;flex-direction:column}
 .mka-kpi.donut b{font-size:28px}
@@ -478,7 +478,7 @@ _BASE_CSS = """
 .mka-table td.muted,.mka-table small{color:#64748b}
 .mka-table small{display:block;font-size:11px;font-weight:400}
 .mka-pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap}
-.mka-pill.pending{background:#fee2e2;color:#b91c1c}.mka-pill.progress{background:#fef3c7;color:#b45309}
+.mka-pill.pending{background:#dbeafe;color:#1d4ed8}.mka-pill.progress{background:#fef3c7;color:#b45309}
 .mka-pill.resolved{background:#dcfce7;color:#15803d}.mka-pill.other{background:#e2e8f0;color:#475569}
 .mka-legend{display:flex;flex-wrap:wrap;gap:14px;color:#e6eefb;font-size:13px;margin:4px 0 8px}
 .mka-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
@@ -800,7 +800,7 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
 def _legend_html() -> str:
     return (
         '<div class="mka-legend">'
-        '<span><i style="background:#d33d2a"></i>Pending</span>'
+        '<span><i style="background:#2563eb"></i>Pending</span>'
         '<span><i style="background:#f69730"></i>In Progress</span>'
         '<span><i style="background:#72ad26"></i>Resolved</span>'
         '<span><i style="background:#7b7b7b"></i>Other</span></div>'
