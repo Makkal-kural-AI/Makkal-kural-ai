@@ -436,8 +436,6 @@ def _panel_title(icon: str, title: str, badge: str = "", badge_class: str = "") 
 # CSS
 # --------------------------------------------------------------------------
 
-# The <style> block only exists while the page that emitted it is rendered, so
-# these rules cannot leak onto the Home, Submit or Tracking pages.
 _BASE_CSS = """
 <style>
 .mka-panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#fff;
@@ -483,7 +481,6 @@ _BASE_CSS = """
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
-
 
 _LOGIN_CSS = """
 <style>
@@ -542,13 +539,12 @@ _LOGIN_CSS = """
 """
 
 
-
 def _inject(*css: str) -> None:
     st.markdown("".join(css), unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------
-# Completed Work banner
+# Completed Work banner (Home page)
 # --------------------------------------------------------------------------
 
 
@@ -608,7 +604,7 @@ def _popup_html(record: dict, show_description: bool) -> str:
 
 
 def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", show_description: bool = True) -> None:
-    """Folium map with one pin per complaint that has valid saved coordinates."""
+    """Folium map with one pin per complaint that has valid or resolved coordinates."""
     mappable = [r for r in rows if r.get("_latitude") is not None and r.get("_longitude") is not None]
     missing = len(rows) - len(mappable)
 
@@ -624,7 +620,7 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
     for r in shown:
         folium.Marker(
             location=[r["_latitude"], r["_longitude"]],
-            tooltip=f'{r["_tracking_id"]} · {r["_category"]}',
+            tooltip=f'{r["_tracking_id"]} · {r["_category"]} ({r["_location"]})',
             popup=folium.Popup(_popup_html(r, show_description), max_width=280),
             icon=folium.Icon(color=BUCKET_COLORS.get(r["_bucket"], "gray"), icon="info-sign"),
         ).add_to(complaint_map)
@@ -680,23 +676,14 @@ def _whisper_model_name() -> str:
 
 @st.cache_resource(show_spinner=False)
 def _load_whisper_model(name: str):
-    """Load the local Whisper model once per server process (CPU only).
-
-    The model weights are downloaded for free from the Whisper release files
-    the first time (the Dockerfile pre-downloads them at build time).
-    """
+    """Load the local Whisper model once per server process (CPU only)."""
     import whisper
 
     return whisper.load_model(name, device="cpu")
 
 
 def _transcribe_local_whisper(audio_file, whisper_lang: str) -> str | None:
-    """Transcribe a recording with Whisper running on this server.
-
-    No OpenAI API, API key or network call is used for transcription. The
-    audio is written to a temporary file that is always deleted afterwards, and
-    only the resulting text is placed in the form.
-    """
+    """Transcribe a recording with Whisper running on this server."""
     if audio_file is None:
         return None
 
@@ -709,7 +696,7 @@ def _transcribe_local_whisper(audio_file, whisper_lang: str) -> str | None:
         return None
 
     try:
-        import whisper  # noqa: F401  (checks the package is installed)
+        import whisper  # noqa: F401
     except ImportError:
         st.error("Local Whisper is not installed on the server. Add 'openai-whisper' to requirements.txt.")
         return None
@@ -733,7 +720,6 @@ def _transcribe_local_whisper(audio_file, whisper_lang: str) -> str | None:
     except MemoryError:
         st.error("The server ran out of memory while processing audio. Please type your complaint instead.")
     except Exception as exc:
-        # Only the error type is shown, never internal details.
         st.error(f"Voice processing failed ({type(exc).__name__}). Please try again or type your complaint.")
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -791,7 +777,6 @@ def _render_voice_input() -> None:
             )
             audio_file = st.audio_input("Record your complaint", key="mka_voice_audio")
             if audio_file is not None:
-                # Streamlit reruns often; only transcribe each new recording once.
                 signature = hashlib.sha256(audio_file.getvalue()).hexdigest() + lang["whisper"]
                 if st.session_state.get("mka_whisper_signature") != signature:
                     st.session_state["mka_whisper_signature"] = signature
@@ -810,7 +795,6 @@ def render_submit() -> None:
     st.title("📝 Submit a Complaint")
     st.caption("Type a village or area name (like Chennai or Saidapet) to auto-fill coordinates, or click the map to pin a spot.")
 
-    # Clear the form after a successful submission (done before the widgets exist).
     if st.session_state.pop("mka_clear_form", False):
         st.session_state["mka_description"] = ""
         st.session_state["mka_location_name"] = ""
@@ -833,8 +817,6 @@ def render_submit() -> None:
             selected_lon = map_data["last_clicked"]["lng"]
             st.success(f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
 
-    # Voice input runs first so recognised text can be placed in the
-    # description box before that widget is created on this run.
     _render_voice_input()
 
     category = st.selectbox("Category", COMPLAINT_CATEGORIES, key="mka_category")
@@ -1034,6 +1016,63 @@ def _render_admin_login() -> None:
             st.error(f"Incorrect access key. ({attempts}/{MAX_FAILED_ATTEMPTS} failed attempts)")
 
 
+def _render_admin_notifications(records: list[dict]) -> None:
+    """Shows live notifications inside the Admin Dashboard once logged in."""
+    if not records:
+        st.info("🔔 **Admin Notifications:** No complaints in the system yet.")
+        return
+
+    pending_rows = [r for r in records if r["_bucket"] == "Pending"]
+    progress_rows = [r for r in records if r["_bucket"] == "In Progress"]
+    missing_coords = [
+        r for r in records
+        if r["_bucket"] != "Resolved" and (r.get("_latitude") is None or r.get("_longitude") is None)
+    ]
+
+    alerts: list[str] = []
+    if pending_rows:
+        alerts.append(
+            f"🆕 <b>{len(pending_rows)} Pending / New Complaint(s)</b> need review or status update."
+        )
+    if progress_rows:
+        alerts.append(
+            f"⏳ <b>{len(progress_rows)} Complaint(s) In Progress</b> currently being handled."
+        )
+    if missing_coords:
+        alerts.append(
+            f"📍 <b>{len(missing_coords)} Active Complaint(s)</b> have no map coordinates yet."
+        )
+
+    recent_items = "".join(
+        f"<div style='font-size:13px;line-height:1.45;margin:5px 0;color:#e2e8f0;'>"
+        f"• <b>{_esc(r['_tracking_id'])}</b> — {_esc(r['_category'])} "
+        f"({_esc(r['_location'])}) · {_pill(r)} · <span>{_esc(_date_label(r, True))}</span></div>"
+        for r in records[:4]
+    )
+
+    summary_html = (
+        "".join(f"<div style='font-size:14px;margin:4px 0;color:#fff;'>{a}</div>" for a in alerts)
+        if alerts
+        else "<div style='font-size:14px;color:#bbf7d0;'>✅ All complaints are resolved and up to date!</div>"
+    )
+
+    st.markdown(
+        f"""
+        <div class="mka-card" style="background:#0f172a;color:#f8fafc;border:1px solid rgba(148,163,184,0.35);margin-bottom:14px;">
+            <div class="mka-card-head" style="color:#ffffff;margin-bottom:8px;">
+                <span>🔔 Admin Notifications</span>
+                <small style="background:#1e293b;color:#93c5fd;">{len(pending_rows)} Pending</small>
+            </div>
+            {summary_html}
+            <hr style="border-color:rgba(148,163,184,0.2);margin:10px 0;">
+            <div style="font-size:12px;font-weight:700;color:#94a3b8;margin-bottom:4px;">LATEST ACTIVITY</div>
+            {recent_items}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _admin_table_html(records: list[dict]) -> str:
     head = "<tr><th>ID</th><th>Category</th><th>Description</th><th>Location</th><th>Status</th><th>Reported</th></tr>"
     body = []
@@ -1094,6 +1133,8 @@ def render_admin() -> None:
     records = _load_records()
     if records is None:
         return
+
+    _render_admin_notifications(records)
 
     total = len(records)
     pending = sum(1 for r in records if r["_bucket"] == "Pending")
