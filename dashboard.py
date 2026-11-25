@@ -1141,20 +1141,36 @@ def render_admin() -> None:
     resolved = sum(1 for r in records if r["_bucket"] == "Resolved")
     pct = int(round((resolved / total) * 100)) if total > 0 else 0
 
-    st.markdown('<div class="mka-sheet">', unsafe_allow_html=True)
-    st.markdown(_kpi_html(total, pending, in_progress, resolved, pct), unsafe_allow_html=True)
-
     cat_items = _group_counts([r["_category"] for r in records])
     trend_pts, undated_count = _trend_points(records, days=7)
+    undated_note = (
+        f"<div class='mka-note'>{undated_count} record(s) have no timestamp and are excluded from the daily trend.</div>"
+        if undated_count
+        else ""
+    )
+
     st.markdown(
-        '<div class="mka-grid2">'
-        f'<div class="mka-card"><div class="mka-card-head">Complaints by Category <small>{len(cat_items)} categories</small></div>{_bar_chart_svg(cat_items)}</div>'
-        f'<div class="mka-card"><div class="mka-card-head">Reports Received (7 Days) <small>IST</small></div>{_line_chart_svg(trend_pts)}'
-        f'{f"<div class=&#39;mka-note&#39;>{undated_count} record(s) have no timestamp and are excluded from the daily trend.</div>" if undated_count else ""}</div>'
-        "</div>",
+        f"""
+        <style>
+        .mka-sheet [data-testid="stMarkdownContainer"]:empty {{ display: none; }}
+        </style>
+        <div class="mka-sheet">
+            {_kpi_html(total, pending, in_progress, resolved, pct)}
+            <div class="mka-grid2">
+                <div class="mka-card">
+                    <div class="mka-card-head">Complaints by Category <small>{len(cat_items)} categories</small></div>
+                    {_bar_chart_svg(cat_items)}
+                </div>
+                <div class="mka-card">
+                    <div class="mka-card-head">Reports Received (7 Days) <small>IST</small></div>
+                    {_line_chart_svg(trend_pts)}
+                    {undated_note}
+                </div>
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="mka-section">📋 All Registered Complaints</div>', unsafe_allow_html=True)
     if records:
