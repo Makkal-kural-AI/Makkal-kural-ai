@@ -87,7 +87,7 @@ _PROGRESS = {"in progress", "in-progress", "inprogress", "ongoing"}
 _RESOLVED = {"resolved", "closed", "completed"}
 
 BUCKET_COLORS = {
-    "Pending": "#2563eb",
+    "Pending": "red",
     "In Progress": "orange",
     "Resolved": "green",
     "Other": "gray",
@@ -464,7 +464,7 @@ _BASE_CSS = """
 .mka-kpi{background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:4px}
 .mka-kpi span{font-size:13px;color:#475569}
 .mka-kpi b{font-size:34px;line-height:1.1;color:#0f172a}
-.mka-kpi.pending{background:#dbeafe}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
+.mka-kpi.pending{background:#fee2e2}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
 .mka-kpi.donut{flex-direction:row;align-items:center;gap:12px}
 .mka-kpi.donut div{display:flex;flex-direction:column}
 .mka-kpi.donut b{font-size:28px}
@@ -482,7 +482,7 @@ _BASE_CSS = """
 .mka-table td.muted,.mka-table small{color:#64748b}
 .mka-table small{display:block;font-size:11px;font-weight:400}
 .mka-pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap}
-.mka-pill.pending{background:#dbeafe;color:#1d4ed8}.mka-pill.submitted{background:#fee2e2;color:#b91c1c}.mka-pill.progress{background:#fef3c7;color:#b45309}
+.mka-pill.pending{background:#fee2e2;color:#b91c1c}.mka-pill.submitted{background:#dbeafe;color:#1d4ed8}.mka-pill.progress{background:#fef3c7;color:#b45309}
 .mka-pill.resolved{background:#dcfce7;color:#15803d}.mka-pill.other{background:#e2e8f0;color:#475569}
 .mka-legend{display:flex;flex-wrap:wrap;gap:14px;color:#e6eefb;font-size:13px;margin:4px 0 8px}
 .mka-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
@@ -774,11 +774,13 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
     shown = mappable[:MAX_MAP_MARKERS]
     complaint_map = folium.Map(location=list(DEFAULT_MAP_CENTER), zoom_start=11)
     for r in shown:
+        status = str(r.get("_status", "")).strip().lower()
+        pin_color = "blue" if status == "submitted" else BUCKET_COLORS.get(r["_bucket"], "gray")
         folium.Marker(
             location=[r["_latitude"], r["_longitude"]],
             tooltip=f'{r["_tracking_id"]} · {r["_category"]} ({r["_location"]})',
             popup=folium.Popup(_popup_html(r, show_description), max_width=280),
-            icon=folium.Icon(color=("red" if str(r.get("_status", "")).strip().lower() == "submitted" else BUCKET_COLORS.get(r["_bucket"], "gray")), icon="info-sign"),
+            icon=folium.Icon(color=pin_color, icon="info-sign"),
         ).add_to(complaint_map)
 
     lats = [r["_latitude"] for r in shown]
@@ -804,10 +806,10 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
 def _legend_html() -> str:
     return (
         '<div class="mka-legend">'
-        '<span><i style="background:#2563eb"></i>Pending</span>'
+        '<span><i style="background:#d33d2a"></i>Pending</span>'
         '<span><i style="background:#f69730"></i>In Progress</span>'
         '<span><i style="background:#72ad26"></i>Resolved</span>'
-        '<span><i style="background:#7b7b7b"></i>Other</span></div>'
+        '<span><i style="background:#2563eb"></i>Submitted</span></div>'
     )
 
 
@@ -1438,3 +1440,4 @@ def render_admin() -> None:
     st.markdown('<div class="mka-section">🗺️ Complaint Map</div>', unsafe_allow_html=True)
     st.markdown(_legend_html(), unsafe_allow_html=True)
     show_map(records, height=450, key="admin_map", show_description=True)
+```[cite: 8, 9]
