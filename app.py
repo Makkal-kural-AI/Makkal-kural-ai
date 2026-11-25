@@ -59,23 +59,21 @@ st.markdown(
        Row 3: Admin (full width below)
     */
     @media (max-width: 768px) {
-        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] {
+        [data-testid="stMainBlockContainer"] > div > div > [data-testid="stHorizontalBlock"]:first-of-type,
+        [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"]:first-of-type {
             display: flex !important;
             flex-direction: row !important;
             flex-wrap: wrap !important;
             gap: 8px !important;
             align-items: stretch !important;
         }
-        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1),
-        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2),
-        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3),
-        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(4) {
+        [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has(.mka-nav-btn):nth-of-type(1) > [data-testid="column"]:nth-child(-n+4) {
             flex: 0 0 calc(50% - 4px) !important;
             width: calc(50% - 4px) !important;
             max-width: calc(50% - 4px) !important;
-            min-width: 0 !important;
+            min-width: calc(50% - 4px) !important;
         }
-        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(5) {
+        [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has(.mka-nav-btn):nth-of-type(1) > [data-testid="column"]:nth-child(5) {
             flex: 0 0 100% !important;
             width: 100% !important;
             max-width: 100% !important;
@@ -99,12 +97,12 @@ nav_items = [
     ("Admin", "Admin Dashboard"),
 ]
 
-with st.container(key="mka_nav_bar"):
-    cols = st.columns(len(nav_items))
-    for col, (label, page_name) in zip(cols, nav_items):
-        with col:
-            if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
-                go(page_name)
+cols = st.columns(len(nav_items))
+for idx, (col, (label, page_name)) in enumerate(zip(cols, nav_items)):
+    with col:
+        st.markdown(f'<span class="mka-nav-btn" data-nav="{idx}"></span>', unsafe_allow_html=True)
+        if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
+            go(page_name)
 
 # Page Router
 if st.session_state.page == "Home":
