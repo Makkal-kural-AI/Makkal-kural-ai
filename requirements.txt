@@ -2,6 +2,7 @@
 streamlit>=1.40
 pandas
 streamlit-mic-recorder
+openai
 openai-whisper
 SpeechRecognition
 PyAudio
