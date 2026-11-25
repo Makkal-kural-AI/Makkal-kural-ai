@@ -3,6 +3,9 @@ Makkal Kural AI — UI Dashboard Modules
 Exports:
   render_submit(), render_tracking(), render_public(), render_admin(),
   render_notifications_banner(), render_notifications_page()
+
+This module only defines functions. Importing it never renders anything and it
+never calls st.set_page_config() — app.py owns the page configuration.
 """
 
 from __future__ import annotations
@@ -55,6 +58,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_MAP_CENTER = (13.0827, 80.2707)  # Chennai
 MAX_MAP_MARKERS = 1000
 PUBLIC_TABLE_ROWS = 60
+
+# Citizens may write names or phone numbers in the free-text description, so it
+# is hidden on the public page and its map. Admins always see it.
 PUBLIC_SHOW_DESCRIPTION = False
 
 _PENDING = {"pending", "new", "submitted", "open", "registered"}
@@ -69,7 +75,7 @@ BUCKET_COLORS = {
 }
 CHART_COLORS = ["#2563eb", "#38bdf8", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"]
 
-# Fast offline/instant coordinates for common localities (case-insensitive keys)
+# Fast instant coordinates for common localities (case-insensitive keys)
 KNOWN_LOCATIONS: dict[str, tuple[float, float]] = {
     "chennai": (13.0827, 80.2707),
     "saidapet": (13.0231, 80.2206),
@@ -98,6 +104,7 @@ KNOWN_LOCATIONS: dict[str, tuple[float, float]] = {
 
 
 def _text(value, default: str = "") -> str:
+    """Convert a database value to clean text; None / NaN become `default`."""
     if value is None:
         return default
     if isinstance(value, float) and math.isnan(value):
@@ -139,7 +146,6 @@ def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
         if known_key in key or key in known_key:
             return coords
 
-    # Fallback lookup via OpenStreetMap Nominatim if online
     try:
         query = quote(f"{cleaned}, Tamil Nadu, India")
         url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1"
@@ -193,7 +199,6 @@ def normalise_record(row: dict) -> dict:
     village = _text(row.get("village"))
     region = district or village or (location if location != "Not provided" else "")
 
-    # Automatically resolve coordinates for existing complaints that only have a location name
     if lat is None or lon is None:
         lookup_place = village or location or district
         auto_lat, auto_lon = resolve_coordinates(lookup_place)
@@ -227,6 +232,7 @@ def _date_label(record: dict, with_time: bool = False) -> str:
 
 
 def _load_records() -> list[dict] | None:
+    """Load and normalise complaints; shows an error and returns None on failure."""
     if not database_configured():
         st.warning(
             "The database is not configured. Set SUPABASE_URL and "
@@ -241,6 +247,7 @@ def _load_records() -> list[dict] | None:
 
 
 def _group_counts(values: list[str]) -> list[tuple[str, int]]:
+    """Count values ignoring case, most common first."""
     labels: dict[str, str] = {}
     counts: Counter = Counter()
     for value in values:
@@ -260,7 +267,7 @@ def _matches(record: dict, needle: str, include_description: bool) -> bool:
 
 
 # --------------------------------------------------------------------------
-# HTML / SVG building blocks
+# HTML / SVG building blocks (all dynamic text is escaped)
 # --------------------------------------------------------------------------
 
 
@@ -277,6 +284,124 @@ def _pill(record: dict) -> str:
     bucket = record["_bucket"]
     css = {"Pending": "pending", "In Progress": "progress", "Resolved": "resolved"}.get(bucket, "other")
     return f'<span class="mka-pill {css}">{_esc(record["_status"])}</span>'
+
+
+def _axis(max_value: int) -> tuple[int, int]:
+    """Return (step, top) for a y-axis with about four intervals."""
+    raw = max(max_value, 1) / 4
+    magnitude = 10 ** math.floor(math.log10(raw))
+    step = magnitude
+    for factor in (1, 2, 5, 10):
+        step = factor * magnitude
+        if raw <= step:
+            break
+    step = int(max(1, step))
+    return step, step * math.ceil(max(max_value, 1) / step)
+
+
+def _chart_frame(top: int, step: int, width: int, height: int, left: int, right: int, ptop: int, bottom: int) -> str:
+    parts = []
+    plot_h = height - ptop - bottom
+    for tick in range(0, top + 1, step):
+        y = ptop + plot_h - plot_h * tick / top
+        parts.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#e5eaf2" stroke-width="1"/>'
+            f'<text x="{left - 6}" y="{y + 4:.1f}" text-anchor="end" font-size="11" fill="#64748b">{tick}</text>'
+        )
+    return "".join(parts)
+
+
+def _bar_chart_svg(items: list[tuple[str, int]]) -> str:
+    if not items:
+        return '<div class="mka-empty-chart">No data yet</div>'
+    width, height, left, right, ptop, bottom = 420, 230, 38, 10, 16, 40
+    step, top = _axis(max(v for _, v in items))
+    plot_h = height - ptop - bottom
+    slot = (width - left - right) / len(items)
+    bar_w = min(48, slot * 0.58)
+    parts = [_chart_frame(top, step, width, height, left, right, ptop, bottom)]
+    for i, (label, value) in enumerate(items):
+        x = left + slot * i + (slot - bar_w) / 2
+        h = plot_h * value / top
+        y = ptop + plot_h - h
+        color = CHART_COLORS[i % len(CHART_COLORS)]
+        parts.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{h:.1f}" rx="3" fill="{color}"/>'
+            f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">{value}</text>'
+            f'<text x="{x + bar_w / 2:.1f}" y="{height - bottom + 16}" text-anchor="middle" font-size="11" fill="#475569">{_esc(_shorten(label, 12))}</text>'
+        )
+    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Complaints by category" style="width:100%;height:auto">{"".join(parts)}</svg>'
+
+
+def _line_chart_svg(points: list[tuple[str, int]]) -> str:
+    if not points or not any(v for _, v in points):
+        return '<div class="mka-empty-chart">No dated reports in this period</div>'
+    width, height, left, right, ptop, bottom = 420, 230, 38, 26, 16, 40
+    step, top = _axis(max(v for _, v in points))
+    plot_h = height - ptop - bottom
+    plot_w = width - left - right
+    n = len(points)
+    coords = []
+    for i, (_, value) in enumerate(points):
+        x = left + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+        y = ptop + plot_h - plot_h * value / top
+        coords.append((x, y))
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    base = ptop + plot_h
+    area = f"{coords[0][0]:.1f},{base} {line} {coords[-1][0]:.1f},{base}"
+    parts = [
+        _chart_frame(top, step, width, height, left, right, ptop, bottom),
+        f'<polygon points="{area}" fill="rgba(37,99,235,.14)"/>',
+        f'<polyline points="{line}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>',
+    ]
+    for (label, value), (x, y) in zip(points, coords):
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#fff" stroke="#2563eb" stroke-width="2"/>'
+            f'<text x="{x:.1f}" y="{height - bottom + 16}" text-anchor="middle" font-size="11" fill="#475569">{_esc(label)}</text>'
+        )
+    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Reports received per day" style="width:100%;height:auto">{"".join(parts)}</svg>'
+
+
+def _donut_svg(percent: int) -> str:
+    radius = 34
+    circumference = 2 * math.pi * radius
+    arc = ""
+    if percent > 0:
+        arc = (
+            f'<circle cx="42" cy="42" r="{radius}" fill="none" stroke="#16a34a" stroke-width="9" '
+            f'stroke-linecap="round" stroke-dasharray="{circumference * percent / 100:.2f} {circumference:.2f}" '
+            f'transform="rotate(-90 42 42)"/>'
+        )
+    return (
+        '<svg viewBox="0 0 84 84" width="84" height="84" role="img" aria-label="Completion rate">'
+        f'<circle cx="42" cy="42" r="{radius}" fill="none" stroke="#e2e8f0" stroke-width="9"/>{arc}'
+        '<circle cx="42" cy="42" r="17" fill="#16a34a"/>'
+        '<path d="M34 42l6 6 11-12" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>'
+        "</svg>"
+    )
+
+
+def _kpi_html(total: int, pending: int, progress: int, resolved: int, rate: int) -> str:
+    return (
+        '<div class="mka-kpis">'
+        f'<div class="mka-kpi"><span>Total Reports</span><b>{total}</b></div>'
+        f'<div class="mka-kpi pending"><span>Pending</span><b>{pending}</b></div>'
+        f'<div class="mka-kpi progress"><span>In Progress</span><b>{progress}</b></div>'
+        f'<div class="mka-kpi resolved"><span>Resolved</span><b>{resolved}</b></div>'
+        f'<div class="mka-kpi donut">{_donut_svg(rate)}<div><b>{rate}%</b><span>Completion<br>Rate</span></div></div>'
+        "</div>"
+    )
+
+
+def _trend_points(records: list[dict], days: int = 7) -> tuple[list[tuple[str, int]], int]:
+    today = datetime.now(IST).date()
+    counts: Counter = Counter(r["_created_at"].date() for r in records if r["_created_at"] is not None)
+    points = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        points.append((day.strftime("%d %b"), counts.get(day, 0)))
+    undated = sum(1 for r in records if r["_created_at"] is None)
+    return points, undated
 
 
 def _panel_title(icon: str, title: str, badge: str = "", badge_class: str = "") -> str:
@@ -296,8 +421,21 @@ _BASE_CSS = """
   border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:5px 13px;font-size:13px;font-weight:600;text-shadow:none}
 .mka-badge i{width:9px;height:9px;border-radius:50%;background:#f5a524;display:inline-block}
 .mka-badge.locked i{background:#ef4444}
+.mka-sheet{background:#f4f7fb;color:#0f172a;border-radius:16px;padding:16px;box-shadow:0 12px 34px rgba(0,0,0,.35);margin-bottom:16px}
+.mka-kpis{display:grid;grid-template-columns:repeat(4,1fr) 1.45fr;gap:12px;margin-bottom:14px}
+.mka-kpi{background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:4px}
+.mka-kpi span{font-size:13px;color:#475569}
+.mka-kpi b{font-size:34px;line-height:1.1;color:#0f172a}
+.mka-kpi.pending{background:#fde4e4}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
+.mka-kpi.donut{flex-direction:row;align-items:center;gap:12px}
+.mka-kpi.donut div{display:flex;flex-direction:column}
+.mka-kpi.donut b{font-size:28px}
+.mka-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .mka-card{background:#fff;color:#0f172a;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);margin-bottom:12px}
 .mka-card-head{display:flex;align-items:center;justify-content:space-between;font-weight:700;font-size:15px;margin-bottom:6px;color:#0f172a}
+.mka-card-head small{font-weight:600;font-size:11px;color:#475569;background:#eef2f7;border-radius:6px;padding:3px 8px}
+.mka-empty-chart{height:200px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:14px}
+.mka-note{color:#64748b;font-size:12px;margin-top:8px}
 .mka-tablewrap{overflow:auto;max-height:520px;border-radius:12px;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.1)}
 .mka-table{width:100%;border-collapse:collapse;font-size:13px;color:#0f172a;margin:0}
 .mka-table th{position:sticky;top:0;background:#f1f5f9;text-align:left;padding:9px 10px;font-weight:700;color:#334155;white-space:nowrap;border:0}
@@ -310,10 +448,14 @@ _BASE_CSS = """
 .mka-pill.resolved{background:#dcfce7;color:#15803d}.mka-pill.other{background:#e2e8f0;color:#475569}
 .mka-legend{display:flex;flex-wrap:wrap;gap:14px;color:#e6eefb;font-size:13px;margin:4px 0 8px}
 .mka-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
-.mka-noti-box{background:rgba(15,23,42,0.82);border:1.5px solid #86efac;border-radius:16px;padding:16px 18px;color:#f8fafc;margin:12px 0 8px;box-shadow:0 10px 28px rgba(0,0,0,0.35)}
-.mka-progress-bar-bg{width:100%;height:10px;background:rgba(255,255,255,0.2);border-radius:999px;overflow:hidden;margin:8px 0 12px}
-.mka-progress-bar-fill{height:100%;background:#22c55e;border-radius:999px}
+.mka-section{color:#fff;font-size:20px;font-weight:800;margin:18px 0 8px;text-shadow:0 2px 8px rgba(0,0,0,.6)}
+.mka-hero-noti{background:rgba(17,24,39,0.86);border:2px solid #86efac;box-shadow:0 0 22px rgba(134,239,172,0.35),0 12px 28px rgba(0,0,0,0.45);border-radius:20px;padding:18px 20px;margin:14px auto 10px auto;max-width:680px;color:#ffffff}
+.mka-hero-noti-title{font-size:20px;font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.mka-hero-noti-sub{font-size:15px;color:#e2e8f0;margin-bottom:10px}
+.mka-hero-track{width:100%;height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-bottom:12px}
+.mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
 [data-testid="stWidgetLabel"] p{color:#e6eefb !important}
+@media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
 
@@ -342,6 +484,12 @@ _LOGIN_CSS = """
     margin: 0 0 14px;
     min-height: 58px;
 }
+@media(max-width: 600px) {
+    .st-key-mka_login_scene {
+        padding: 20px 8px;
+        min-height: 380px;
+    }
+}
 </style>
 """
 
@@ -360,37 +508,37 @@ def _build_progress_summary(records: list[dict]) -> tuple[int, int, int, list[di
     resolved_rows = [r for r in records if r["_bucket"] == "Resolved"]
     resolved_count = len(resolved_rows)
     pct = int(round((resolved_count / total) * 100)) if total > 0 else 0
-    return total, resolved_count, pct, resolved_rows[:4]
+    return total, resolved_count, pct, resolved_rows
 
 
 def render_notifications_banner() -> None:
-    """Compact Notifications & Completed Work card shown above the proverb on Home."""
+    """Renders the Notifications & Completed Work card above the proverb."""
     _inject(_BASE_CSS)
     raw_rows, _ = fetch_complaints() if database_configured() else ([], None)
     records = [normalise_record(r) for r in (raw_rows or [])]
-    total, resolved_count, pct, recent_resolved = _build_progress_summary(records)
+    total, resolved_count, pct, resolved_rows = _build_progress_summary(records)
 
-    if recent_resolved:
-        updates_html = "".join(
-            f"<div style='font-size:13px;margin:4px 0;'>• <b>Resolved:</b> {_esc(r['_category'])} "
-            f"({_esc(r['_location'])}) — {_esc(_shorten(r['_resolution_notes'] or r['_description'] or 'Completed', 85))} "
-            f"<span style='color:#cbd5e1;'>({_esc(_date_label(r))})</span></div>"
-            for r in recent_resolved
+    if resolved_rows:
+        lines_html = "".join(
+            f"<div style='font-size:14px;line-height:1.45;margin:6px 0;color:#f1f5f9;'>"
+            f"- <b>Resolved:</b> {_esc(r['_category'])} ({_esc(r['_location'])}) - "
+            f"{_esc(_shorten(r['_resolution_notes'] or r['_description'] or 'Completed', 65))} "
+            f"- Updated {_esc(_date_label(r))}</div>"
+            for r in resolved_rows[:2]
         )
     else:
-        updates_html = "<div style='font-size:13px;color:#cbd5e1;'>• Track live updates as complaints are resolved by local authorities.</div>"
+        lines_html = (
+            "<div style='font-size:14px;line-height:1.45;margin:6px 0;color:#cbd5e1;'>"
+            "- No completed work updates recorded yet.</div>"
+        )
 
-    categories_text = ", ".join(COMPLAINT_CATEGORIES)
     st.markdown(
         f"""
-        <div class="mka-noti-box">
-            <div style="font-size:17px;font-weight:800;margin-bottom:4px;">🔔 Notifications &amp; Completed Work</div>
-            <div style="font-size:14px;">Progress: <b>{resolved_count} of {total}</b> resolved (<b>{pct}%</b> complete)</div>
-            <div class="mka-progress-bar-bg"><div class="mka-progress-bar-fill" style="width:{pct}%;"></div></div>
-            {updates_html}
-            <div style="font-size:12px;color:#cbd5e1;margin-top:10px;border-top:1px solid rgba(255,255,255,0.15);padding-top:8px;">
-                <b>Complaints you can file:</b> {_esc(categories_text)}
-            </div>
+        <div class="mka-hero-noti">
+            <div class="mka-hero-noti-title">🔔 Notifications &amp; Completed Work</div>
+            <div class="mka-hero-noti-sub">Progress: {resolved_count} of {total} resolved ({pct}% complete)</div>
+            <div class="mka-hero-track"><div class="mka-hero-fill" style="width:{pct}%;"></div></div>
+            {lines_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -398,7 +546,7 @@ def render_notifications_banner() -> None:
 
 
 def render_notifications_page() -> None:
-    """Dedicated Notifications & Completed Work view."""
+    """Dedicated Notifications & Completed Work page."""
     _inject(_BASE_CSS)
     st.markdown(_panel_title("🔔", "Notifications & Completed Work"), unsafe_allow_html=True)
 
@@ -406,9 +554,8 @@ def render_notifications_page() -> None:
     if records is None:
         return
 
-    total, resolved_count, pct, recent_resolved = _build_progress_summary(records)
+    total, resolved_count, pct, resolved_rows = _build_progress_summary(records)
     in_progress_count = sum(1 for r in records if r["_bucket"] == "In Progress")
-    pending_count = sum(1 for r in records if r["_bucket"] == "Pending")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Complaints", total)
@@ -418,9 +565,9 @@ def render_notifications_page() -> None:
 
     st.progress(min(max(pct / 100.0, 0.0), 1.0))
 
-    st.markdown("<h4 style='color:white;'>✅ Completed Work Updates</h4>", unsafe_allow_html=True)
-    if recent_resolved:
-        for r in recent_resolved:
+    st.markdown("<div class='mka-section'>✅ Completed Work Updates</div>", unsafe_allow_html=True)
+    if resolved_rows:
+        for r in resolved_rows:
             note = r["_resolution_notes"] or r["_description"] or "Issue resolved."
             st.markdown(
                 f"""
@@ -438,7 +585,7 @@ def render_notifications_page() -> None:
     else:
         st.info("No completed work updates recorded yet.")
 
-    st.markdown("<h4 style='color:white;'>📝 Complaints You Can File</h4>", unsafe_allow_html=True)
+    st.markdown("<div class='mka-section'>📝 Complaints You Can File</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='mka-card'>"
         + "".join(f"<div style='padding:4px 0;'>• <b>{_esc(cat)}</b></div>" for cat in COMPLAINT_CATEGORIES)
@@ -466,6 +613,7 @@ def _popup_html(record: dict, show_description: bool) -> str:
 
 
 def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", show_description: bool = True) -> None:
+    """Folium map with one pin per complaint that has valid or resolved coordinates."""
     mappable = [r for r in rows if r.get("_latitude") is not None and r.get("_longitude") is not None]
     missing = len(rows) - len(mappable)
 
@@ -525,7 +673,7 @@ def render_submit() -> None:
     _inject(_BASE_CSS)
     st.markdown("<h2 style='color:white;'>📝 Submit a Complaint</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<p style='color:#e2e8f0;'>Type a village or area name (like <b>Chennai</b> or <b>Saidapet</b>) to auto-detect coordinates, or click the map to pin an exact spot.</p>",
+        "<p style='color:#e2e8f0;'>Type a village or area name (like <b>Chennai</b> or <b>Saidapet</b>) to auto-fill coordinates, or click the map to pin a spot.</p>",
         unsafe_allow_html=True,
     )
 
@@ -646,7 +794,7 @@ def render_public() -> None:
         if filtered:
             st.markdown(_public_table_html(filtered), unsafe_allow_html=True)
             if len(filtered) > PUBLIC_TABLE_ROWS:
-                st.caption(f"Showing the latest {PUBLIC_TABLE_ROWS} of {len(filtered)} matching complaints.")
+                st.caption(f"Showing the latest {PUBLIC_TABLE_ROWS} of {len(filtered)} matching complaints. Use search to narrow the list.")
             else:
                 st.caption(f"{len(filtered)} complaint(s).")
         else:
@@ -697,7 +845,12 @@ def _render_admin_login() -> None:
         result = otp_input(disabled=disabled, key=component_key)
 
     if not configured:
-        st.error("Admin access is not configured. Set ADMIN_ACCESS_KEY to a six-digit number.")
+        st.error(
+            "Admin access is not configured. "
+            "Set ADMIN_ACCESS_KEY to a six-digit number "
+            "in Render environment variables or "
+            "Streamlit secrets."
+        )
         return
 
     if locked:
@@ -723,6 +876,19 @@ def _render_admin_login() -> None:
             st.error(f"Maximum attempts exceeded. Locked for {LOCKOUT_SECONDS} seconds.")
         else:
             st.error(f"Incorrect access key. ({attempts}/{MAX_FAILED_ATTEMPTS} failed attempts)")
+
+
+def _admin_table_html(records: list[dict]) -> str:
+    head = "<tr><th>ID</th><th>Category</th><th>Description</th><th>Location</th><th>Status</th><th>Reported</th></tr>"
+    body = []
+    for r in records:
+        description = r["_description"]
+        body.append(
+            f'<tr><td class="id">{_esc(r["_tracking_id"])}</td><td>{_esc(r["_category"])}</td>'
+            f'<td title="{_esc(" ".join(description.split()))}">{_esc(_shorten(description, 80)) or "—"}</td>'
+            f'<td>{_esc(r["_location"])}</td><td>{_pill(r)}</td><td class="muted">{_esc(_date_label(r, True))}</td></tr>'
+        )
+    return f'<div class="mka-tablewrap"><table class="mka-table"><thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>'
 
 
 def _render_update_form(selected: dict) -> None:
@@ -779,22 +945,34 @@ def render_admin() -> None:
     resolved = sum(1 for r in records if r["_bucket"] == "Resolved")
     pct = int(round((resolved / total) * 100)) if total > 0 else 0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Reports", total)
-    m2.metric("Pending", pending)
-    m3.metric("In Progress", in_progress)
-    m4.metric("Resolved", resolved)
-    m5.metric("Completion", f"{pct}%")
+    st.markdown('<div class="mka-sheet">', unsafe_allow_html=True)
+    st.markdown(_kpi_html(total, pending, in_progress, resolved, pct), unsafe_allow_html=True)
 
-    st.markdown("<h4 style='color:white;margin-top:16px;'>📋 Update Complaint Status</h4>", unsafe_allow_html=True)
+    cat_items = _group_counts([r["_category"] for r in records])
+    trend_pts, undated_count = _trend_points(records, days=7)
+    st.markdown(
+        '<div class="mka-grid2">'
+        f'<div class="mka-card"><div class="mka-card-head">Complaints by Category <small>{len(cat_items)} categories</small></div>{_bar_chart_svg(cat_items)}</div>'
+        f'<div class="mka-card"><div class="mka-card-head">Reports Received (7 Days) <small>IST</small></div>{_line_chart_svg(trend_pts)}'
+        f'{f"<div class=&#39;mka-note&#39;>{undated_count} record(s) have no timestamp and are excluded from the daily trend.</div>" if undated_count else ""}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="mka-section">📋 All Registered Complaints</div>', unsafe_allow_html=True)
     if records:
+        st.markdown(_admin_table_html(records), unsafe_allow_html=True)
+        st.markdown('<div class="mka-section">✏️ Update Complaint Status</div>', unsafe_allow_html=True)
         options_map = {
             f"{r['_tracking_id']} · {r['_category']} · {r['_location']} ({r['_status']})": r
             for r in records
         }
         chosen_label = st.selectbox("Select a complaint", list(options_map.keys()), key="mka_admin_select")
         _render_update_form(options_map[chosen_label])
+    else:
+        st.info("No complaints found.")
 
-    st.markdown("<h4 style='color:white;margin-top:16px;'>🗺️ Complaint Map</h4>", unsafe_allow_html=True)
+    st.markdown('<div class="mka-section">🗺️ Complaint Map</div>', unsafe_allow_html=True)
     st.markdown(_legend_html(), unsafe_allow_html=True)
     show_map(records, height=450, key="admin_map", show_description=True)
