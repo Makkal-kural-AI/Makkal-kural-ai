@@ -92,7 +92,7 @@ BUCKET_COLORS = {
     "Resolved": "green",
     "Other": "gray",
 }
-CHART_COLORS = ["#0b4777", "#1d5f91", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"]
+CHART_COLORS = ["#2563eb", "#38bdf8", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"]
 
 # Fast instant coordinates for common localities (case-insensitive keys)
 KNOWN_LOCATIONS: dict[str, tuple[float, float]] = {
@@ -150,9 +150,26 @@ def _first_coord(row: dict, names: tuple, low: float, high: float):
     return None
 
 
+def _nominatim_lookup(query_text: str) -> tuple[float | None, float | None]:
+    try:
+        query = quote(query_text)
+        url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1"
+        req = Request(url, headers={"User-Agent": "MakkalKuralAI/1.0 (contact@makkalkural.ai)"})
+        with urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data:
+                lat = _coord(data[0].get("lat"), -90, 90)
+                lon = _coord(data[0].get("lon"), -180, 180)
+                if lat is not None and lon is not None:
+                    return lat, lon
+    except Exception:
+        pass
+    return None, None
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
-    """Resolve latitude and longitude from a village/area/city name."""
+    """Resolve latitude and longitude from any village/area/town/city name."""
     cleaned = " ".join(_text(place_name).split())
     if not cleaned or cleaned.lower() in {"not provided", "unspecified", "none", "na", "n/a"}:
         return None, None
@@ -165,21 +182,18 @@ def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
         if known_key in key or key in known_key:
             return coords
 
-    try:
-        query = quote(f"{cleaned}, Tamil Nadu, India")
-        url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1"
-        req = Request(url, headers={"User-Agent": "MakkalKuralAI/1.0"})
-        with urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data:
-                lat = _coord(data[0].get("lat"), -90, 90)
-                lon = _coord(data[0].get("lon"), -180, 180)
-                if lat is not None and lon is not None:
-                    return lat, lon
-    except Exception:
-        pass
+    # 1. Try Tamil Nadu, India first
+    lat, lon = _nominatim_lookup(f"{cleaned}, Tamil Nadu, India")
+    if lat is not None and lon is not None:
+        return lat, lon
 
-    return None, None
+    # 2. Fallback to anywhere in India
+    lat, lon = _nominatim_lookup(f"{cleaned}, India")
+    if lat is not None and lon is not None:
+        return lat, lon
+
+    # 3. Fallback to global search for any place name
+    return _nominatim_lookup(cleaned)
 
 
 def _parse_dt(value):
@@ -374,12 +388,12 @@ def _line_chart_svg(points: list[tuple[str, int]]) -> str:
     area = f"{coords[0][0]:.1f},{base} {line} {coords[-1][0]:.1f},{base}"
     parts = [
         _chart_frame(top, step, width, height, left, right, ptop, bottom),
-        f'<polygon points="{area}" fill="rgba(11,71,119,.14)"/>',
-        f'<polyline points="{line}" fill="none" stroke="#0b4777" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>',
+        f'<polygon points="{area}" fill="rgba(37,99,235,.14)"/>',
+        f'<polyline points="{line}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>',
     ]
     for (label, value), (x, y) in zip(points, coords):
         parts.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#fff" stroke="#0b4777" stroke-width="2"/>'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#fff" stroke="#2563eb" stroke-width="2"/>'
             f'<text x="{x:.1f}" y="{height - bottom + 16}" text-anchor="middle" font-size="11" fill="#475569">{_esc(label)}</text>'
         )
     return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Reports received per day" style="width:100%;height:auto">{"".join(parts)}</svg>'
@@ -478,19 +492,60 @@ _BASE_CSS = """
 .mka-hero-track{width:100%;height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-bottom:12px}
 .mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
 
-/* Submit page high-contrast readability */
-.mka-submit-header h1{color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.75) !important;margin-bottom:4px !important;}
-.mka-submit-sub{color:#f1f5f9 !important;font-size:15px !important;font-weight:500 !important;text-shadow:0 1px 6px rgba(0,0,0,0.75) !important;margin-bottom:14px !important;}
-[data-testid="stVerticalBlockBorderWrapper"]{background:rgba(10,25,47,0.86) !important;border:1px solid rgba(197,228,255,0.45) !important;border-radius:16px !important;color:#ffffff !important;}
+/* High-contrast page headers, text & labels across Submit / Track / All pages */
+.mka-page-header h1{color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.8) !important;margin-bottom:4px !important;}
+.mka-page-sub{color:#f8fafc !important;font-size:15px !important;font-weight:500 !important;text-shadow:0 1px 6px rgba(0,0,0,0.8) !important;margin-bottom:14px !important;}
+.mka-track-card{background:rgba(11,25,44,0.92);border:1px solid rgba(197,228,255,0.45);border-radius:16px;padding:18px 20px;margin-top:14px;color:#ffffff;box-shadow:0 8px 24px rgba(0,0,0,0.35);}
+.mka-track-row{font-size:15px;line-height:1.6;margin:6px 0;color:#f8fafc;}
+.mka-track-row b{color:#93c5fd;}
+.mka-track-notes{margin-top:10px;padding:10px 14px;border-radius:10px;background:rgba(30,58,95,0.75);border-left:4px solid #60a5fa;color:#f8fafc;font-size:14px;}
+
+/* Voice container card */
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background-color: rgba(11, 25, 44, 0.92) !important;
+    border-radius: 16px !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border: 1px solid rgba(197, 228, 255, 0.55) !important;
+}
+
+/* Every heading, label, radio option, and caption inside the card */
+[data-testid="stVerticalBlockBorderWrapper"] h1,
+[data-testid="stVerticalBlockBorderWrapper"] h2,
 [data-testid="stVerticalBlockBorderWrapper"] h3,
 [data-testid="stVerticalBlockBorderWrapper"] p,
 [data-testid="stVerticalBlockBorderWrapper"] span,
-[data-testid="stVerticalBlockBorderWrapper"] label{color:#f8fafc !important;}
+[data-testid="stVerticalBlockBorderWrapper"] label,
+[data-testid="stVerticalBlockBorderWrapper"] div[role="radiogroup"] label p,
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"],
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] * {
+    color: #f8fafc !important;
+    opacity: 1 !important;
+}
+
+/* Expander header & body */
+[data-testid="stExpander"],
+[data-testid="stExpander"] details,
 [data-testid="stExpander"] summary,
 [data-testid="stExpander"] summary span,
-[data-testid="stExpander"] p{color:#f8fafc !important;}
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background-color: rgba(15, 33, 58, 0.94) !important;
+    color: #ffffff !important;
+    border-color: rgba(197, 228, 255, 0.35) !important;
+}
 
-[data-testid="stWidgetLabel"] p{color:#ffffff !important;font-weight:600 !important;text-shadow:0 1px 4px rgba(0,0,0,0.65) !important;}
+/* Form field labels & markdown text outside cards */
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] span {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8) !important;
+}
+[data-testid="stMarkdownContainer"] p {
+    color: #f8fafc;
+}
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
@@ -808,9 +863,9 @@ def render_submit() -> None:
     _inject(_BASE_CSS)
     st.markdown(
         """
-        <div class="mka-submit-header">
+        <div class="mka-page-header">
             <h1>📝 Submit a Complaint</h1>
-            <div class="mka-submit-sub">Type a village or area name (like Chennai or Saidapet) to auto-fill coordinates, or click the map to pin a spot.</div>
+            <div class="mka-page-sub">Type any village, town, or area name below to locate it on the map, or click directly on the map to pin a spot.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -821,27 +876,76 @@ def render_submit() -> None:
         st.session_state["mka_location_name"] = ""
         st.session_state["mka_category"] = COMPLAINT_CATEGORIES[0]
     st.session_state.setdefault("mka_description", "")
+    st.session_state.setdefault("mka_location_name", "")
 
     flash = st.session_state.pop("mka_submit_flash", None)
     if flash:
         st.success(flash)
 
-    default_lat, default_lon = DEFAULT_MAP_CENTER
+    # Read current location input so map centers on any typed area
+    current_loc_text = _text(st.session_state.get("mka_location_name"))
+    typed_lat, typed_lon = resolve_coordinates(current_loc_text) if current_loc_text else (None, None)
+
     selected_lat, selected_lon = None, None
+    prev_click = st.session_state.get("mka_map_clicked")
+    if isinstance(prev_click, tuple) and len(prev_click) == 2:
+        selected_lat, selected_lon = prev_click
+
+    if selected_lat is not None and selected_lon is not None:
+        map_center = (selected_lat, selected_lon)
+        map_zoom = 15
+    elif typed_lat is not None and typed_lon is not None:
+        map_center = (typed_lat, typed_lon)
+        map_zoom = 14
+    else:
+        map_center = DEFAULT_MAP_CENTER
+        map_zoom = 12
 
     if folium is not None and st_folium is not None:
-        m = folium.Map(location=[default_lat, default_lon], zoom_start=12)
+        m = folium.Map(location=[map_center[0], map_center[1]], zoom_start=map_zoom)
         m.add_child(folium.LatLngPopup())
-        map_data = st_folium(m, height=320, use_container_width=True, key="submit_map")
+
+        if typed_lat is not None and typed_lon is not None:
+            folium.Marker(
+                location=[typed_lat, typed_lon],
+                tooltip=f"Located: {current_loc_text}",
+                popup=f"<b>{_esc(current_loc_text)}</b><br>Lat: {typed_lat:.5f}, Lon: {typed_lon:.5f}",
+                icon=folium.Icon(color="blue", icon="map-marker"),
+            ).add_to(m)
+
+        if selected_lat is not None and selected_lon is not None:
+            folium.Marker(
+                location=[selected_lat, selected_lon],
+                tooltip="Pinned Spot",
+                popup=f"Pinned Spot<br>Lat: {selected_lat:.5f}, Lon: {selected_lon:.5f}",
+                icon=folium.Icon(color="red", icon="info-sign"),
+            ).add_to(m)
+
+        map_data = st_folium(m, height=340, use_container_width=True, key="submit_map")
         if map_data and map_data.get("last_clicked"):
-            selected_lat = map_data["last_clicked"]["lat"]
-            selected_lon = map_data["last_clicked"]["lng"]
-            st.success(f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
+            clicked_lat = _coord(map_data["last_clicked"].get("lat"), -90, 90)
+            clicked_lon = _coord(map_data["last_clicked"].get("lng"), -180, 180)
+            if clicked_lat is not None and clicked_lon is not None:
+                if (clicked_lat, clicked_lon) != (selected_lat, selected_lon):
+                    selected_lat, selected_lon = clicked_lat, clicked_lon
+                    st.session_state["mka_map_clicked"] = (clicked_lat, clicked_lon)
+                    st.rerun()
+
+        if selected_lat is not None and selected_lon is not None:
+            st.success(f"📍 Pinned Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
+        elif typed_lat is not None and typed_lon is not None:
+            st.success(f"📍 Located '{current_loc_text}': Lat {typed_lat:.5f}, Lon {typed_lon:.5f}")
+        elif current_loc_text:
+            st.info(f"🔍 Searching/pinning '{current_loc_text}' — if not auto-located, click directly on the map to pin the exact spot.")
 
     _render_voice_input()
 
     category = st.selectbox("Category", COMPLAINT_CATEGORIES, key="mka_category")
-    location_name = st.text_input("Village / Area Name", placeholder="e.g., Chennai, Saidapet", key="mka_location_name")
+    location_name = st.text_input(
+        "Village / Area Name",
+        placeholder="Type any area, town, or village (e.g., Velachery, Avadi, Madurai, Kanchipuram)",
+        key="mka_location_name",
+    )
     description = st.text_area(
         "Complaint Details",
         height=150,
@@ -853,8 +957,8 @@ def render_submit() -> None:
         if not description.strip():
             st.error("Please provide complaint details using voice or text.")
         else:
-            final_lat, final_lon = selected_lat, selected_lon
             clean_loc = location_name.strip()
+            final_lat, final_lon = selected_lat, selected_lon
             if (final_lat is None or final_lon is None) and clean_loc:
                 auto_lat, auto_lon = resolve_coordinates(clean_loc)
                 if auto_lat is not None and auto_lon is not None:
@@ -880,24 +984,49 @@ def render_submit() -> None:
                     f"Complaint registered successfully! Tracking ID: **{trk_id}**{coord_msg}"
                 )
                 st.session_state["mka_clear_form"] = True
+                st.session_state.pop("mka_map_clicked", None)
                 st.rerun()
 
 
 def render_tracking() -> None:
-    st.title("🔎 Track Complaint Status")
-    tracking_id = st.text_input("Enter your Tracking ID").strip()
+    _inject(_BASE_CSS)
+    st.markdown(
+        """
+        <div class="mka-page-header">
+            <h1>🔎 Track Complaint Status</h1>
+            <div class="mka-page-sub">Enter your Tracking ID (for example, MKAI-123456) to check live complaint progress.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    tracking_id = st.text_input("Enter your Tracking ID", placeholder="e.g., MKAI-855485", key="mka_track_input").strip()
     if tracking_id:
         records = get_complaint_by_tracking_id(tracking_id)
         if records:
             for item in records:
                 r = normalise_record(item)
-                st.success(f"Tracking ID: {r['_tracking_id']}")
-                st.write(f"**Status:** {r['_status']}")
-                st.write(f"**Category:** {r['_category']}")
-                st.write(f"**Location:** {r['_location']}")
-                st.write(f"**Description:** {r['_description']}")
-                if r["_resolution_notes"]:
-                    st.info(f"**Resolution Notes:** {r['_resolution_notes']}")
+                notes_html = (
+                    f'<div class="mka-track-notes"><b>Resolution Notes:</b> {_esc(r["_resolution_notes"])}</div>'
+                    if r["_resolution_notes"]
+                    else ""
+                )
+                st.markdown(
+                    f"""
+                    <div class="mka-track-card">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+                            <span style="font-size:18px;font-weight:800;color:#ffffff;">🎫 {_esc(r['_tracking_id'])}</span>
+                            {_pill(r)}
+                        </div>
+                        <div class="mka-track-row"><b>Status:</b> {_esc(r['_status'])}</div>
+                        <div class="mka-track-row"><b>Category:</b> {_esc(r['_category'])}</div>
+                        <div class="mka-track-row"><b>Location:</b> {_esc(r['_location'])}</div>
+                        <div class="mka-track-row"><b>Description:</b> {_esc(r['_description']) or '—'}</div>
+                        <div class="mka-track-row"><b>Reported On:</b> {_esc(_date_label(r, True))}</div>
+                        {notes_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
         else:
             st.warning("No complaint found matching that Tracking ID.")
 
