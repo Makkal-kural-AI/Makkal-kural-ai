@@ -87,7 +87,7 @@ _PROGRESS = {"in progress", "in-progress", "inprogress", "ongoing"}
 _RESOLVED = {"resolved", "closed", "completed"}
 
 BUCKET_COLORS = {
-    "Pending": "red",
+    "Pending": "#2563eb",
     "In Progress": "orange",
     "Resolved": "green",
     "Other": "gray",
@@ -316,7 +316,11 @@ def _shorten(text: str, limit: int) -> str:
 
 def _pill(record: dict) -> str:
     bucket = record["_bucket"]
-    css = {"Pending": "pending", "In Progress": "progress", "Resolved": "resolved"}.get(bucket, "other")
+    status = str(record.get("_status", "")).strip().lower()
+    if status == "submitted":
+        css = "submitted"
+    else:
+        css = {"Pending": "pending", "In Progress": "progress", "Resolved": "resolved"}.get(bucket, "other")
     return f'<span class="mka-pill {css}">{_esc(record["_status"])}</span>'
 
 
@@ -460,7 +464,7 @@ _BASE_CSS = """
 .mka-kpi{background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:4px}
 .mka-kpi span{font-size:13px;color:#475569}
 .mka-kpi b{font-size:34px;line-height:1.1;color:#0f172a}
-.mka-kpi.pending{background:#fde4e4}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
+.mka-kpi.pending{background:#dbeafe}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
 .mka-kpi.donut{flex-direction:row;align-items:center;gap:12px}
 .mka-kpi.donut div{display:flex;flex-direction:column}
 .mka-kpi.donut b{font-size:28px}
@@ -478,7 +482,7 @@ _BASE_CSS = """
 .mka-table td.muted,.mka-table small{color:#64748b}
 .mka-table small{display:block;font-size:11px;font-weight:400}
 .mka-pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap}
-.mka-pill.pending{background:#fee2e2;color:#b91c1c}.mka-pill.progress{background:#fef3c7;color:#b45309}
+.mka-pill.pending{background:#dbeafe;color:#1d4ed8}.mka-pill.submitted{background:#fee2e2;color:#b91c1c}.mka-pill.progress{background:#fef3c7;color:#b45309}
 .mka-pill.resolved{background:#dcfce7;color:#15803d}.mka-pill.other{background:#e2e8f0;color:#475569}
 .mka-legend{display:flex;flex-wrap:wrap;gap:14px;color:#e6eefb;font-size:13px;margin:4px 0 8px}
 .mka-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
@@ -568,33 +572,68 @@ div[role="radiogroup"] label *,
 [data-testid="stMarkdownContainer"] span {
     color: #f8fafc;
 }
-/* Light Mode: make normal page text and widget labels readable.
-   Dark cards (voice, tracking, and dashboard panels) keep their existing colors. */
-html[data-theme="light"] .stApp [data-testid="stMarkdownContainer"] p,
-html[data-theme="light"] .stApp [data-testid="stMarkdownContainer"] li,
-html[data-theme="light"] .stApp [data-testid="stMarkdownContainer"] span,
-html[data-theme="light"] .stApp [data-testid="stCaptionContainer"],
-html[data-theme="light"] .stApp [data-testid="stCaptionContainer"] *,
-html[data-theme="light"] .stApp [data-testid="stWidgetLabel"],
-html[data-theme="light"] .stApp [data-testid="stWidgetLabel"] *,
-html[data-theme="light"] .stApp [data-testid="stTextInput"] label,
-html[data-theme="light"] .stApp [data-testid="stTextArea"] label,
-html[data-theme="light"] .stApp [data-testid="stSelectbox"] label,
-html[data-theme="light"] .stApp [data-testid="stRadio"] label,
-html[data-theme="light"] .stApp [data-testid="stCheckbox"] label {
-    color: #1e293b !important;
-    -webkit-text-fill-color: #1e293b !important;
-    opacity: 1 !important;
+/* Light-mode readability fix: override the dark-mode text styles above. */
+/* Streamlit may place the active theme attribute on html or body. */
+:where(html, body)[data-theme="light"] .mka-page-header h1,
+:where(html, body)[data-theme="light"] .mka-panel-title,
+:where(html, body)[data-theme="light"] .mka-section,
+:where(html, body)[data-theme="light"] .mka-page-sub {
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    text-shadow: none !important;
 }
-
-/* Keep text white inside components that intentionally have a dark background. */
-html[data-theme="light"] .stApp .stVerticalBlockBorderWrapper :is(h1,h2,h3,h4,p,span,label,div,small,a),
-html[data-theme="light"] .stApp [data-testid="stVerticalBlockBorderWrapper"] :is(h1,h2,h3,h4,p,span,label,div,small,a),
-html[data-theme="light"] .stApp [data-testid="stExpander"] :is(h1,h2,h3,h4,p,span,label,div,small,a,summary) {
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
+:where(html, body)[data-theme="light"] .stVerticalBlockBorderWrapper,
+:where(html, body)[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"],
+:where(html, body)[data-theme="light"] .stVerticalBlockBorderWrapper > div,
+:where(html, body)[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] > div {
+    background-color: rgba(255,255,255,0.97) !important;
+    border-color: rgba(71,85,105,0.28) !important;
 }
-
+:where(html, body)[data-theme="light"] .stVerticalBlockBorderWrapper :is(h1,h2,h3,h4,p,span,label,div,small,a),
+:where(html, body)[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] :is(h1,h2,h3,h4,p,span,label,div,small,a),
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] :is(h1,h2,h3,h4,p,span,label,div,small,a,summary),
+:where(html, body)[data-theme="light"] [data-testid="stWidgetLabel"],
+:where(html, body)[data-theme="light"] [data-testid="stWidgetLabel"] *,
+:where(html, body)[data-theme="light"] .stWidgetLabel,
+:where(html, body)[data-theme="light"] .stWidgetLabel *,
+:where(html, body)[data-theme="light"] div[role="radiogroup"] label,
+:where(html, body)[data-theme="light"] div[role="radiogroup"] label *,
+:where(html, body)[data-theme="light"] [data-testid="stRadio"] label,
+:where(html, body)[data-theme="light"] [data-testid="stRadio"] label *,
+:where(html, body)[data-theme="light"] [data-testid="stMarkdownContainer"] p,
+:where(html, body)[data-theme="light"] [data-testid="stMarkdownContainer"] li,
+:where(html, body)[data-theme="light"] [data-testid="stMarkdownContainer"] span {
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    text-shadow: none !important;
+}
+:where(html, body)[data-theme="light"] [data-testid="stCaptionContainer"] *,
+:where(html, body)[data-theme="light"] .stCaption * {
+    color: #475569 !important;
+    -webkit-text-fill-color: #475569 !important;
+    text-shadow: none !important;
+}
+:where(html, body)[data-theme="light"] [data-testid="stExpander"],
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] details,
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] summary,
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background-color: #f8fafc !important;
+    border-color: rgba(71,85,105,0.28) !important;
+}
+:where(html, body)[data-theme="light"] .mka-loc-banner,
+:where(html, body)[data-theme="light"] .mka-track-card {
+    background: #f8fafc !important;
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    border-color: #64748b !important;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.10) !important;
+}
+:where(html, body)[data-theme="light"] .mka-loc-banner *,
+:where(html, body)[data-theme="light"] .mka-track-card * {
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    text-shadow: none !important;
+}
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
@@ -739,7 +778,7 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
             location=[r["_latitude"], r["_longitude"]],
             tooltip=f'{r["_tracking_id"]} · {r["_category"]} ({r["_location"]})',
             popup=folium.Popup(_popup_html(r, show_description), max_width=280),
-            icon=folium.Icon(color=BUCKET_COLORS.get(r["_bucket"], "gray"), icon="info-sign"),
+            icon=folium.Icon(color=("red" if str(r.get("_status", "")).strip().lower() == "submitted" else BUCKET_COLORS.get(r["_bucket"], "gray")), icon="info-sign"),
         ).add_to(complaint_map)
 
     lats = [r["_latitude"] for r in shown]
@@ -765,7 +804,7 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
 def _legend_html() -> str:
     return (
         '<div class="mka-legend">'
-        '<span><i style="background:#d33d2a"></i>Pending</span>'
+        '<span><i style="background:#2563eb"></i>Pending</span>'
         '<span><i style="background:#f69730"></i>In Progress</span>'
         '<span><i style="background:#72ad26"></i>Resolved</span>'
         '<span><i style="background:#7b7b7b"></i>Other</span></div>'
