@@ -5,6 +5,7 @@ and render_notifications_banner() from dashboard.py.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dashboard import (
     render_admin,
     render_notifications_banner,
@@ -27,6 +28,41 @@ if "page" not in st.session_state:
 def go(page: str):
     st.session_state.page = page
     st.rerun()
+
+
+def _is_mobile_viewport() -> bool:
+    """Detect mobile viewport width via query param / JS bridge without breaking desktop."""
+    if "mka_is_mobile" not in st.session_state:
+        st.session_state.mka_is_mobile = False
+
+    # Check if JS reported screen width in URL query params
+    qp_w = st.query_params.get("mka_w")
+    if qp_w is not None:
+        try:
+            st.session_state.mka_is_mobile = int(qp_w) <= 768
+        except ValueError:
+            pass
+
+    components.html(
+        """
+        <script>
+        (function() {
+            const w = window.innerWidth;
+            const url = new URL(window.parent.location.href);
+            const current = url.searchParams.get("mka_w");
+            if (String(w) !== current) {
+                url.searchParams.set("mka_w", String(w));
+                window.parent.history.replaceState({}, "", url.toString());
+                if ((w <= 768) !== (Number(current || 9999) <= 768)) {
+                    window.parent.location.reload();
+                }
+            }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+    return bool(st.session_state.mka_is_mobile)
 
 
 # Custom UI CSS
@@ -52,34 +88,6 @@ st.markdown(
         border: 1px solid #c5e4ff;
     }
     .stButton>button:hover { background: #0877ce; color: white; }
-
-    /* Mobile layout:
-       Row 1: Home | Submit (side-by-side)
-       Row 2: Track | All Complaints (side-by-side)
-       Row 3: Admin (full width below)
-    */
-    @media (max-width: 768px) {
-        [data-testid="stMainBlockContainer"] > div > div > [data-testid="stHorizontalBlock"]:first-of-type,
-        [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"]:first-of-type {
-            display: flex !important;
-            flex-direction: row !important;
-            flex-wrap: wrap !important;
-            gap: 8px !important;
-            align-items: stretch !important;
-        }
-        [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has(.mka-nav-btn):nth-of-type(1) > [data-testid="column"]:nth-child(-n+4) {
-            flex: 0 0 calc(50% - 4px) !important;
-            width: calc(50% - 4px) !important;
-            max-width: calc(50% - 4px) !important;
-            min-width: calc(50% - 4px) !important;
-        }
-        [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"]:has(.mka-nav-btn):nth-of-type(1) > [data-testid="column"]:nth-child(5) {
-            flex: 0 0 100% !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            min-width: 100% !important;
-        }
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -97,12 +105,33 @@ nav_items = [
     ("Admin", "Admin Dashboard"),
 ]
 
-cols = st.columns(len(nav_items))
-for idx, (col, (label, page_name)) in enumerate(zip(cols, nav_items)):
-    with col:
-        st.markdown(f'<span class="mka-nav-btn" data-nav="{idx}"></span>', unsafe_allow_html=True)
-        if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
-            go(page_name)
+is_mobile = _is_mobile_viewport()
+
+if is_mobile:
+    r1_c1, r1_c2 = st.columns(2)
+    with r1_c1:
+        if st.button("Home", use_container_width=True, key="nav_m_Home"):
+            go("Home")
+    with r1_c2:
+        if st.button("Submit", use_container_width=True, key="nav_m_Submit Complaint"):
+            go("Submit Complaint")
+
+    r2_c1, r2_c2 = st.columns(2)
+    with r2_c1:
+        if st.button("Track", use_container_width=True, key="nav_m_Tracking"):
+            go("Tracking")
+    with r2_c2:
+        if st.button("All Complaints", use_container_width=True, key="nav_m_All Complaints"):
+            go("All Complaints")
+
+    if st.button("Admin", use_container_width=True, key="nav_m_Admin Dashboard"):
+        go("Admin Dashboard")
+else:
+    cols = st.columns(len(nav_items))
+    for col, (label, page_name) in zip(cols, nav_items):
+        with col:
+            if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
+                go(page_name)
 
 # Page Router
 if st.session_state.page == "Home":
