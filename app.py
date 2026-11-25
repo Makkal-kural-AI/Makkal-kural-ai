@@ -54,26 +54,31 @@ st.markdown(
     .stButton>button:hover { background: #0877ce; color: white; }
 
     /* Mobile layout:
-       Row 1: Home | Submit
-       Row 2: Track | All Complaints
-       Row 3: Admin (full width)
+       Row 1: Home | Submit (side-by-side)
+       Row 2: Track | All Complaints (side-by-side)
+       Row 3: Admin (full width below)
     */
     @media (max-width: 768px) {
-        .mka-nav-row [data-testid="stHorizontalBlock"] {
+        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-direction: row !important;
             flex-wrap: wrap !important;
             gap: 8px !important;
+            align-items: stretch !important;
         }
-        .mka-nav-row [data-testid="column"]:nth-child(1),
-        .mka-nav-row [data-testid="column"]:nth-child(2),
-        .mka-nav-row [data-testid="column"]:nth-child(3),
-        .mka-nav-row [data-testid="column"]:nth-child(4) {
+        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1),
+        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2),
+        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3),
+        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(4) {
             flex: 0 0 calc(50% - 4px) !important;
             width: calc(50% - 4px) !important;
-            min-width: calc(50% - 4px) !important;
+            max-width: calc(50% - 4px) !important;
+            min-width: 0 !important;
         }
-        .mka-nav-row [data-testid="column"]:nth-child(5) {
+        .st-key-mka_nav_bar [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(5) {
             flex: 0 0 100% !important;
             width: 100% !important;
+            max-width: 100% !important;
             min-width: 100% !important;
         }
     }
@@ -86,7 +91,6 @@ st.markdown(
 st.markdown('<div class="brand">📢 Makkal Kural AI</div>', unsafe_allow_html=True)
 
 # Header Navigation Bar
-st.markdown('<div class="mka-nav-row">', unsafe_allow_html=True)
 nav_items = [
     ("Home", "Home"),
     ("Submit", "Submit Complaint"),
@@ -94,12 +98,13 @@ nav_items = [
     ("All Complaints", "All Complaints"),
     ("Admin", "Admin Dashboard"),
 ]
-cols = st.columns(len(nav_items))
-for col, (label, page_name) in zip(cols, nav_items):
-    with col:
-        if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
-            go(page_name)
-st.markdown("</div>", unsafe_allow_html=True)
+
+with st.container(key="mka_nav_bar"):
+    cols = st.columns(len(nav_items))
+    for col, (label, page_name) in zip(cols, nav_items):
+        with col:
+            if st.button(label, use_container_width=True, key=f"nav_{page_name}"):
+                go(page_name)
 
 # Page Router
 if st.session_state.page == "Home":
