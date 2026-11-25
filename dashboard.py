@@ -1440,4 +1440,3 @@ def render_admin() -> None:
     st.markdown('<div class="mka-section">🗺️ Complaint Map</div>', unsafe_allow_html=True)
     st.markdown(_legend_html(), unsafe_allow_html=True)
     show_map(records, height=450, key="admin_map", show_description=True)
-```[cite: 8, 9]
