@@ -182,17 +182,14 @@ def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
         if known_key in key or key in known_key:
             return coords
 
-    # 1. Try Tamil Nadu, India first
     lat, lon = _nominatim_lookup(f"{cleaned}, Tamil Nadu, India")
     if lat is not None and lon is not None:
         return lat, lon
 
-    # 2. Fallback to anywhere in India
     lat, lon = _nominatim_lookup(f"{cleaned}, India")
     if lat is not None and lon is not None:
         return lat, lon
 
-    # 3. Fallback to global search for any place name
     return _nominatim_lookup(cleaned)
 
 
@@ -493,57 +490,78 @@ _BASE_CSS = """
 .mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
 
 /* High-contrast page headers, text & labels across Submit / Track / All pages */
-.mka-page-header h1{color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.8) !important;margin-bottom:4px !important;}
-.mka-page-sub{color:#f8fafc !important;font-size:15px !important;font-weight:500 !important;text-shadow:0 1px 6px rgba(0,0,0,0.8) !important;margin-bottom:14px !important;}
-.mka-track-card{background:rgba(11,25,44,0.92);border:1px solid rgba(197,228,255,0.45);border-radius:16px;padding:18px 20px;margin-top:14px;color:#ffffff;box-shadow:0 8px 24px rgba(0,0,0,0.35);}
-.mka-track-row{font-size:15px;line-height:1.6;margin:6px 0;color:#f8fafc;}
-.mka-track-row b{color:#93c5fd;}
-.mka-track-notes{margin-top:10px;padding:10px 14px;border-radius:10px;background:rgba(30,58,95,0.75);border-left:4px solid #60a5fa;color:#f8fafc;font-size:14px;}
+.mka-page-header h1{color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.9) !important;margin-bottom:4px !important;}
+.mka-page-sub{color:#f8fafc !important;-webkit-text-fill-color:#f8fafc !important;font-size:15px !important;font-weight:600 !important;text-shadow:0 1px 6px rgba(0,0,0,0.9) !important;margin-bottom:14px !important;}
+.mka-track-card{background:#09192f !important;border:1px solid rgba(197,228,255,0.55) !important;border-radius:16px !important;padding:18px 20px !important;margin-top:14px !important;color:#ffffff !important;box-shadow:0 8px 24px rgba(0,0,0,0.45) !important;}
+.mka-track-row{font-size:15px;line-height:1.6;margin:6px 0;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;}
+.mka-track-row b{color:#93c5fd !important;-webkit-text-fill-color:#93c5fd !important;}
+.mka-track-notes{margin-top:10px;padding:10px 14px;border-radius:10px;background:#153258 !important;border-left:4px solid #60a5fa !important;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-size:14px;}
 
-/* Voice container card */
+/* Solid dark card for voice block & crisp text even without selection */
+.stVerticalBlockBorderWrapper,
 [data-testid="stVerticalBlockBorderWrapper"],
+.stVerticalBlockBorderWrapper > div,
 [data-testid="stVerticalBlockBorderWrapper"] > div {
-    background-color: rgba(11, 25, 44, 0.92) !important;
+    background-color: #09192f !important;
     border-radius: 16px !important;
-}
-[data-testid="stVerticalBlockBorderWrapper"] {
-    border: 1px solid rgba(197, 228, 255, 0.55) !important;
-}
-
-/* Every heading, label, radio option, and caption inside the card */
-[data-testid="stVerticalBlockBorderWrapper"] h1,
-[data-testid="stVerticalBlockBorderWrapper"] h2,
-[data-testid="stVerticalBlockBorderWrapper"] h3,
-[data-testid="stVerticalBlockBorderWrapper"] p,
-[data-testid="stVerticalBlockBorderWrapper"] span,
-[data-testid="stVerticalBlockBorderWrapper"] label,
-[data-testid="stVerticalBlockBorderWrapper"] div[role="radiogroup"] label p,
-[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"],
-[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] * {
-    color: #f8fafc !important;
+    border-color: rgba(197, 228, 255, 0.55) !important;
     opacity: 1 !important;
 }
 
-/* Expander header & body */
+.stVerticalBlockBorderWrapper :is(h1, h2, h3, h4, p, span, label, div, small, a),
+[data-testid="stVerticalBlockBorderWrapper"] :is(h1, h2, h3, h4, p, span, label, div, small, a),
+[data-testid="stExpander"] :is(h1, h2, h3, h4, p, span, label, div, small, a, summary) {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    mix-blend-mode: normal !important;
+}
+
+.stVerticalBlockBorderWrapper [data-testid="stCaptionContainer"] *,
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] *,
+[data-testid="stCaptionContainer"] *,
+.stCaption * {
+    color: #e2e8f0 !important;
+    -webkit-text-fill-color: #e2e8f0 !important;
+    opacity: 1 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85) !important;
+}
+
+/* Radio buttons & labels */
+div[role="radiogroup"] label,
+div[role="radiogroup"] label *,
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 600 !important;
+}
+
+/* Expander container */
 [data-testid="stExpander"],
 [data-testid="stExpander"] details,
 [data-testid="stExpander"] summary,
-[data-testid="stExpander"] summary span,
 [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
-    background-color: rgba(15, 33, 58, 0.94) !important;
-    color: #ffffff !important;
-    border-color: rgba(197, 228, 255, 0.35) !important;
+    background-color: #0e2442 !important;
+    border-color: rgba(197, 228, 255, 0.4) !important;
+    opacity: 1 !important;
 }
 
-/* Form field labels & markdown text outside cards */
+/* Form field labels & markdown text */
 [data-testid="stWidgetLabel"],
-[data-testid="stWidgetLabel"] p,
-[data-testid="stWidgetLabel"] span {
+[data-testid="stWidgetLabel"] *,
+.stWidgetLabel,
+.stWidgetLabel * {
     color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
     font-weight: 600 !important;
-    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8) !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.85) !important;
 }
-[data-testid="stMarkdownContainer"] p {
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span {
     color: #f8fafc;
 }
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
@@ -882,7 +900,6 @@ def render_submit() -> None:
     if flash:
         st.success(flash)
 
-    # Read current location input so map centers on any typed area
     current_loc_text = _text(st.session_state.get("mka_location_name"))
     typed_lat, typed_lon = resolve_coordinates(current_loc_text) if current_loc_text else (None, None)
 
