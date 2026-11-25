@@ -489,9 +489,13 @@ _BASE_CSS = """
 .mka-hero-track{width:100%;height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-bottom:12px}
 .mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
 
-/* High-contrast page headers, text & labels across Submit / Track / All pages */
+/* High-contrast page headers, location banner, text & labels */
 .mka-page-header h1{color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.9) !important;margin-bottom:4px !important;}
 .mka-page-sub{color:#f8fafc !important;-webkit-text-fill-color:#f8fafc !important;font-size:15px !important;font-weight:600 !important;text-shadow:0 1px 6px rgba(0,0,0,0.9) !important;margin-bottom:14px !important;}
+.mka-loc-banner{display:flex;align-items:center;gap:8px;background:#09192f !important;border:1px solid #4ade80 !important;border-left:5px solid #4ade80 !important;border-radius:12px !important;padding:11px 16px !important;margin:10px 0 14px 0 !important;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-size:15px !important;font-weight:700 !important;box-shadow:0 6px 18px rgba(0,0,0,0.4) !important;opacity:1 !important;}
+.mka-loc-banner .mka-loc-place{color:#86efac !important;-webkit-text-fill-color:#86efac !important;font-weight:800 !important;}
+.mka-loc-banner .mka-loc-coords{color:#f8fafc !important;-webkit-text-fill-color:#f8fafc !important;font-weight:600 !important;}
+.mka-loc-banner.info{border-color:#60a5fa !important;border-left-color:#60a5fa !important;}
 .mka-track-card{background:#09192f !important;border:1px solid rgba(197,228,255,0.55) !important;border-radius:16px !important;padding:18px 20px !important;margin-top:14px !important;color:#ffffff !important;box-shadow:0 8px 24px rgba(0,0,0,0.45) !important;}
 .mka-track-row{font-size:15px;line-height:1.6;margin:6px 0;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;}
 .mka-track-row b{color:#93c5fd !important;-webkit-text-fill-color:#93c5fd !important;}
@@ -949,11 +953,20 @@ def render_submit() -> None:
                     st.rerun()
 
         if selected_lat is not None and selected_lon is not None:
-            st.success(f"📍 Pinned Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
+            st.markdown(
+                f'<div class="mka-loc-banner">📍 <span class="mka-loc-coords">Pinned Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}</span></div>',
+                unsafe_allow_html=True,
+            )
         elif typed_lat is not None and typed_lon is not None:
-            st.success(f"📍 Located '{current_loc_text}': Lat {typed_lat:.5f}, Lon {typed_lon:.5f}")
-        elif current_loc_text:
-            st.info(f"🔍 Searching/pinning '{current_loc_text}' — if not auto-located, click directly on the map to pin the exact spot.")
+            st.markdown(
+                f'<div class="mka-loc-banner">📍 Located \'<span class="mka-loc-place">{_esc(current_loc_text)}</span>\': <span class="mka-loc-coords">Lat {typed_lat:.5f}, Lon {typed_lon:.5f}</span></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="mka-loc-banner info">🗺️ <span class="mka-loc-coords">Click anywhere on the map to pin coordinates, or enter a Village / Area Name below.</span></div>',
+                unsafe_allow_html=True,
+            )
 
     _render_voice_input()
 
