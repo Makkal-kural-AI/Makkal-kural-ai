@@ -376,7 +376,13 @@ def _panel_title(icon: str, title: str, badge: str = "", badge_class: str = "") 
 _BASE_CSS = """
 <style>
 .mka-panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#fff;
-  font-size:clamp(21px,2.6vw,30px);font-weight:800;margin:4px 0 12px;text-shadow:0 2px 8px rgba(0,0,0,.6)}
+  font-size:clamp(21px,2.6vw,30px);font-weight:800;margin:4px 0 14px;text-shadow:0 2px 8px rgba(0,0,0,.6);
+  background:linear-gradient(100deg,#092b49,#173b5c);border:1px solid rgba(255,255,255,.2);
+  border-radius:12px;padding:15px 24px;min-height:58px}
+.st-key-mka_form_card{background:#f4f7fb;border-radius:16px;padding:18px 20px;box-shadow:0 12px 34px rgba(0,0,0,.35);margin-bottom:16px}
+.st-key-mka_form_card [data-testid="stWidgetLabel"] p,.st-key-mka_form_card h1,.st-key-mka_form_card h2,
+.st-key-mka_form_card h3,.st-key-mka_form_card [data-testid="stMarkdownContainer"] p,
+.st-key-mka_form_card [data-testid="stCaptionContainer"]{color:#0f172a !important;text-shadow:none}
 .mka-badge{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.14);color:#fff;
   border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:5px 13px;font-size:13px;font-weight:600;text-shadow:none}
 .mka-badge i{width:9px;height:9px;border-radius:50%;background:#f5a524;display:inline-block}
@@ -440,22 +446,6 @@ _LOGIN_CSS = """
     display: flex;
     align-items: center;
     justify-content: center;
-}
-
-/* Admin heading */
-.mka-panel-title {
-    background: linear-gradient(
-        100deg,
-        #092b49,
-        #173b5c
-    );
-
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: 12px;
-
-    padding: 15px 24px;
-    margin: 0 0 14px;
-    min-height: 58px;
 }
 
 /* Responsive */
@@ -695,8 +685,14 @@ def _render_voice_input() -> None:
 
 
 def render_submit() -> None:
-    st.title("📝 Submit a Complaint")
+    _inject(_BASE_CSS)
+    st.markdown(_panel_title("📝", "Submit a Complaint"), unsafe_allow_html=True)
     st.caption("Select your location on the map and fill in the issue details.")
+    with st.container(key="mka_form_card"):
+        _render_submit_form()
+
+
+def _render_submit_form() -> None:
 
     # Clear the form after a successful submission (done before the widgets exist).
     if st.session_state.pop("mka_clear_form", False):
@@ -755,7 +751,13 @@ def render_submit() -> None:
 
 
 def render_tracking() -> None:
-    st.title("🔎 Track Complaint Status")
+    _inject(_BASE_CSS)
+    st.markdown(_panel_title("🔎", "Track Complaint Status"), unsafe_allow_html=True)
+    with st.container(key="mka_form_card"):
+        _render_tracking_body()
+
+
+def _render_tracking_body() -> None:
     tracking_id = st.text_input("Enter your Tracking ID").strip()
     if tracking_id:
         records = get_complaint_by_tracking_id(tracking_id)
