@@ -1,5 +1,7 @@
 """
 Makkal Kural AI — Main Entry Point
+Calls render_submit(), render_tracking(), render_public(), render_admin(),
+render_notifications_banner(), and render_notifications_page() from dashboard.py.
 """
 
 import streamlit as st
@@ -28,6 +30,7 @@ def go(page: str):
     st.rerun()
 
 
+# Custom UI CSS
 st.markdown(
     """
     <style>
@@ -51,7 +54,12 @@ st.markdown(
     }
     .stButton>button:hover { background: #0877ce; color: white; }
 
-    /* Mobile layout: Home|Submit, Track|All Complaints, Admin full-width, Notifications full-width */
+    /* Mobile layout:
+       Row 1: Home | Submit
+       Row 2: Track | All Complaints
+       Row 3: Admin (full width)
+       Row 4: Notifications (full width)
+    */
     @media (max-width: 768px) {
         .mka-nav-row [data-testid="stHorizontalBlock"] {
             flex-wrap: wrap !important;
@@ -77,12 +85,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Header Navigation Bar
+# Brand Header
 st.markdown('<div class="brand">📢 Makkal Kural AI</div>', unsafe_allow_html=True)
 
+# Header Navigation Bar
 st.markdown('<div class="mka-nav-row">', unsafe_allow_html=True)
 nav_items = [
-    ("Home", "Home"),
+    ("🏠 Home", "Home"),
     ("Submit", "Submit Complaint"),
     ("Track", "Tracking"),
     ("All Complaints", "All Complaints"),
@@ -102,10 +111,10 @@ if st.session_state.page == "Home":
 
     st.markdown(
         """
-        <div style="text-align: center; padding: 28px 0 16px; color: white;">
-            <h1 style="font-size: clamp(38px, 6vw, 72px); font-weight: 900;">உங்கள் குரல், உங்கள் ஊர்</h1>
-            <h1 style="font-size: clamp(28px, 4vw, 50px); font-weight: 800;">Your Voice, Your Village</h1>
-            <p style="font-size: clamp(18px, 2vw, 25px);">Report local problems. Track progress. Build better communities.</p>
+        <div style="text-align: center; padding: 24px 0 14px; color: white;">
+            <h1 style="font-size: clamp(36px, 6vw, 68px); font-weight: 900; margin-bottom: 6px;">உங்கள் குரல், உங்கள் ஊர்</h1>
+            <h2 style="font-size: clamp(26px, 4vw, 44px); font-weight: 800; margin-top: 0;">Your Voice, Your Village</h2>
+            <p style="font-size: clamp(16px, 2vw, 22px);">Report local problems. Track progress. Build better communities.</p>
         </div>
         """,
         unsafe_allow_html=True,
