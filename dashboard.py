@@ -11,6 +11,7 @@ from __future__ import annotations
 import hmac
 import html
 import math
+import os
 import secrets
 import time
 from collections import Counter
@@ -522,67 +523,63 @@ def _legend_html() -> str:
 # --------------------------------------------------------------------------
 # Citizen pages (unchanged behaviour, with verified bug fixes only)
 # --------------------------------------------------------------------------
-import streamlit.components.v1 as components
+def _transcribe_voice_audio(audio_file) -> str | None:
+    """Transcribe a recorded Tamil/English audio clip with OpenAI Whisper.
 
-def render_voice_recorder() -> str:
-    """Renders a browser-based audio recorder widget for voice complaints."""
-    voice_html = """
-    <div style="background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 14px; padding: 20px; text-align: center; font-family: Inter, sans-serif;">
-        <div style="font-size: 14px; font-weight: 700; color: #334155; margin-bottom: 12px;">🎙️ Voice-First Grievance Recording (Tamil / English)</div>
-        <button id="recBtn" onclick="toggleRecord()" style="background: #2563eb; color: white; border: none; border-radius: 50px; padding: 12px 24px; font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(37,99,235,0.3);">
-            🔴 Start Recording
-        </button>
-        <p id="statusTxt" style="font-size: 12px; color: #64748b; margin-top: 10px;">Tap to record your grievance verbally.</p>
-    </div>
-
-    <script>
-        let mediaRecorder;
-        let audioChunks = [];
-        let isRecording = false;
-
-        async function toggleRecord() {
-            const btn = document.getElementById('recBtn');
-            const status = document.getElementById('statusTxt');
-
-            if (!isRecording) {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    mediaRecorder = new MediaRecorder(stream);
-                    audioChunks = [];
-
-                    mediaRecorder.ondataavailable = event => {
-                        audioChunks.push(event.data);
-                    };
-
-                    mediaRecorder.onstop = async () => {
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                        status.innerText = "Processing audio through Whisper AI...";
-                        
-                        // Here you can send audioBlob to your backend via fetch() if live Whisper transcription is hooked up,
-                        // or simulate transcription for local prototype testing:
-                        setTimeout(() => {
-                            status.innerText = "Voice captured successfully! (Simulated transcription inserted)";
-                        }, 1000);
-                    };
-
-                    mediaRecorder.start();
-                    isRecording = true;
-                    btn.style.background = "#dc2626";
-                    btn.innerText = "⏹️ Stop Recording";
-                    status.innerText = "Listening... Speak your complaint clearly.";
-                } catch (err) {
-                    status.innerText = "Microphone access denied or unavailable.";
-                }
-            } else {
-                mediaRecorder.stop();
-                isRecording = false;
-                btn.style.background = "#2563eb";
-                btn.innerText = "🔴 Start Recording";
-            }
-        }
-    </script>
+    The audio is sent to the OpenAI API for transcription. Only the resulting
+    text is added to the complaint form; this function does not store the
+    original audio file in the database.
     """
-    components.html(voice_html, height=150)
+    if audio_file is None:
+        return None
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("OPENAI_API_KEY")
+        except Exception:
+            api_key = None
+
+    if not api_key:
+        st.error(
+            "Voice transcription is not configured. Add OPENAI_API_KEY "
+            "to your deployment environment variables or Streamlit secrets."
+        )
+        return None
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+        audio_bytes = audio_file.getvalue()
+        if not audio_bytes:
+            st.warning("The microphone recording is empty. Please record again.")
+            return None
+
+        with st.spinner("Transcribing your voice with Whisper..."):
+            result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=(
+                    audio_file.name or "complaint_audio.wav",
+                    audio_bytes,
+                    audio_file.type or "audio/wav",
+                ),
+            )
+
+        transcript = (result.text or "").strip()
+        if not transcript:
+            st.warning("Whisper could not detect speech. Please try again or type your complaint.")
+            return None
+
+        return transcript
+
+    except ImportError:
+        st.error("The OpenAI Python package is missing. Add 'openai' to requirements.txt.")
+    except Exception as exc:
+        # Do not expose API keys or request headers in the UI.
+        st.error(f"Voice transcription failed: {type(exc).__name__}. Please try again or type your complaint.")
+
+    return None
 
 
 def render_submit() -> None:
@@ -601,16 +598,45 @@ def render_submit() -> None:
             selected_lon = map_data["last_clicked"]["lng"]
             st.success(f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
 
+    # Voice recording is outside st.form so Streamlit can process the audio
+    # immediately when the user finishes recording.
+    st.markdown("### 🎙️ Voice Complaint (Tamil / English)")
+    st.caption("Record your complaint. Whisper will convert your speech into text, which you can review before submitting.")
+
+    audio_file = st.audio_input(
+        "Tap the microphone and speak your complaint",
+        key="mka_voice_audio",
+    )
+
+    if audio_file is not None:
+        # Avoid calling Whisper repeatedly on every Streamlit rerun.
+        audio_signature = secrets.token_hex(1)  # unique rerun guard is stored below
+        current_audio = audio_file.getvalue()
+        import hashlib
+        audio_signature = hashlib.sha256(current_audio).hexdigest()
+
+        if st.session_state.get("mka_transcribed_audio_signature") != audio_signature:
+            transcript = _transcribe_voice_audio(audio_file)
+            if transcript:
+                st.session_state["mka_voice_transcript"] = transcript
+                st.session_state["mka_transcribed_audio_signature"] = audio_signature
+                st.success("Voice converted to text. Review or edit it below.")
+
     with st.form("submit_form"):
         category = st.selectbox(
             "Category",
             ["Water Supply", "Garbage", "Road Damage", "Drainage", "Electricity", "Other"],
         )
         location_name = st.text_input("Village / Area Name")
-        description = st.text_area("Complaint Details")
+        description = st.text_area(
+            "Complaint Details",
+            value=st.session_state.get("mka_voice_transcript", ""),
+            height=150,
+            help="You can type a complaint or edit the text recognized from your voice recording.",
+        )
         if st.form_submit_button("Submit Complaint", type="primary", use_container_width=True):
             if not description.strip():
-                st.error("Please provide complaint details.")
+                st.error("Please provide complaint details using voice or text.")
             else:
                 trk_id = f"MKAI-{secrets.randbelow(900000) + 100000}"
                 payload = {
@@ -624,6 +650,8 @@ def render_submit() -> None:
                 }
                 if save_complaint(payload):
                     st.success(f"Complaint registered successfully! Tracking ID: **{trk_id}**")
+                    st.session_state.pop("mka_voice_transcript", None)
+                    st.session_state.pop("mka_transcribed_audio_signature", None)
 
 
 def render_tracking() -> None:
