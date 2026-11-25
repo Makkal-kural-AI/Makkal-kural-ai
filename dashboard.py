@@ -316,7 +316,11 @@ def _shorten(text: str, limit: int) -> str:
 
 def _pill(record: dict) -> str:
     bucket = record["_bucket"]
-    css = {"Pending": "pending", "In Progress": "progress", "Resolved": "resolved"}.get(bucket, "other")
+    status = str(record.get("_status", "")).strip().lower()
+    if status == "submitted":
+        css = "submitted"
+    else:
+        css = {"Pending": "pending", "In Progress": "progress", "Resolved": "resolved"}.get(bucket, "other")
     return f'<span class="mka-pill {css}">{_esc(record["_status"])}</span>'
 
 
@@ -478,7 +482,7 @@ _BASE_CSS = """
 .mka-table td.muted,.mka-table small{color:#64748b}
 .mka-table small{display:block;font-size:11px;font-weight:400}
 .mka-pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap}
-.mka-pill.pending{background:#dbeafe;color:#1d4ed8}.mka-pill.progress{background:#fef3c7;color:#b45309}
+.mka-pill.pending{background:#dbeafe;color:#1d4ed8}.mka-pill.submitted{background:#fee2e2;color:#b91c1c}.mka-pill.progress{background:#fef3c7;color:#b45309}
 .mka-pill.resolved{background:#dcfce7;color:#15803d}.mka-pill.other{background:#e2e8f0;color:#475569}
 .mka-legend{display:flex;flex-wrap:wrap;gap:14px;color:#e6eefb;font-size:13px;margin:4px 0 8px}
 .mka-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
@@ -774,7 +778,7 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
             location=[r["_latitude"], r["_longitude"]],
             tooltip=f'{r["_tracking_id"]} · {r["_category"]} ({r["_location"]})',
             popup=folium.Popup(_popup_html(r, show_description), max_width=280),
-            icon=folium.Icon(color=BUCKET_COLORS.get(r["_bucket"], "gray"), icon="info-sign"),
+            icon=folium.Icon(color=("red" if str(r.get("_status", "")).strip().lower() == "submitted" else BUCKET_COLORS.get(r["_bucket"], "gray")), icon="info-sign"),
         ).add_to(complaint_map)
 
     lats = [r["_latitude"] for r in shown]
