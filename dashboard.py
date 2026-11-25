@@ -477,7 +477,20 @@ _BASE_CSS = """
 .mka-hero-noti-sub{font-size:15px;color:#e2e8f0;margin-bottom:10px}
 .mka-hero-track{width:100%;height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-bottom:12px}
 .mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
-[data-testid="stWidgetLabel"] p{color:#e6eefb !important}
+
+/* Submit page high-contrast readability */
+.mka-submit-header h1{color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.75) !important;margin-bottom:4px !important;}
+.mka-submit-sub{color:#f1f5f9 !important;font-size:15px !important;font-weight:500 !important;text-shadow:0 1px 6px rgba(0,0,0,0.75) !important;margin-bottom:14px !important;}
+[data-testid="stVerticalBlockBorderWrapper"]{background:rgba(10,25,47,0.86) !important;border:1px solid rgba(197,228,255,0.45) !important;border-radius:16px !important;color:#ffffff !important;}
+[data-testid="stVerticalBlockBorderWrapper"] h3,
+[data-testid="stVerticalBlockBorderWrapper"] p,
+[data-testid="stVerticalBlockBorderWrapper"] span,
+[data-testid="stVerticalBlockBorderWrapper"] label{color:#f8fafc !important;}
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary span,
+[data-testid="stExpander"] p{color:#f8fafc !important;}
+
+[data-testid="stWidgetLabel"] p{color:#ffffff !important;font-weight:600 !important;text-shadow:0 1px 4px rgba(0,0,0,0.65) !important;}
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
@@ -792,8 +805,16 @@ def _render_voice_input() -> None:
 
 
 def render_submit() -> None:
-    st.title("📝 Submit a Complaint")
-    st.caption("Type a village or area name (like Chennai or Saidapet) to auto-fill coordinates, or click the map to pin a spot.")
+    _inject(_BASE_CSS)
+    st.markdown(
+        """
+        <div class="mka-submit-header">
+            <h1>📝 Submit a Complaint</h1>
+            <div class="mka-submit-sub">Type a village or area name (like Chennai or Saidapet) to auto-fill coordinates, or click the map to pin a spot.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if st.session_state.pop("mka_clear_form", False):
         st.session_state["mka_description"] = ""
