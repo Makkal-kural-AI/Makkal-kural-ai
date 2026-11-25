@@ -92,7 +92,7 @@ BUCKET_COLORS = {
     "Resolved": "green",
     "Other": "gray",
 }
-CHART_COLORS = ["#0b4777", "#1d5f91", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"]
+CHART_COLORS = ["#2563eb", "#38bdf8", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"]
 
 # Fast instant coordinates for common localities (case-insensitive keys)
 KNOWN_LOCATIONS: dict[str, tuple[float, float]] = {
@@ -150,9 +150,26 @@ def _first_coord(row: dict, names: tuple, low: float, high: float):
     return None
 
 
+def _nominatim_lookup(query_text: str) -> tuple[float | None, float | None]:
+    try:
+        query = quote(query_text)
+        url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1"
+        req = Request(url, headers={"User-Agent": "MakkalKuralAI/1.0 (contact@makkalkural.ai)"})
+        with urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data:
+                lat = _coord(data[0].get("lat"), -90, 90)
+                lon = _coord(data[0].get("lon"), -180, 180)
+                if lat is not None and lon is not None:
+                    return lat, lon
+    except Exception:
+        pass
+    return None, None
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
-    """Resolve latitude and longitude from a village/area/city name."""
+    """Resolve latitude and longitude from any village/area/town/city name."""
     cleaned = " ".join(_text(place_name).split())
     if not cleaned or cleaned.lower() in {"not provided", "unspecified", "none", "na", "n/a"}:
         return None, None
@@ -165,21 +182,15 @@ def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
         if known_key in key or key in known_key:
             return coords
 
-    try:
-        query = quote(f"{cleaned}, Tamil Nadu, India")
-        url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1"
-        req = Request(url, headers={"User-Agent": "MakkalKuralAI/1.0"})
-        with urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data:
-                lat = _coord(data[0].get("lat"), -90, 90)
-                lon = _coord(data[0].get("lon"), -180, 180)
-                if lat is not None and lon is not None:
-                    return lat, lon
-    except Exception:
-        pass
+    lat, lon = _nominatim_lookup(f"{cleaned}, Tamil Nadu, India")
+    if lat is not None and lon is not None:
+        return lat, lon
 
-    return None, None
+    lat, lon = _nominatim_lookup(f"{cleaned}, India")
+    if lat is not None and lon is not None:
+        return lat, lon
+
+    return _nominatim_lookup(cleaned)
 
 
 def _parse_dt(value):
@@ -374,12 +385,12 @@ def _line_chart_svg(points: list[tuple[str, int]]) -> str:
     area = f"{coords[0][0]:.1f},{base} {line} {coords[-1][0]:.1f},{base}"
     parts = [
         _chart_frame(top, step, width, height, left, right, ptop, bottom),
-        f'<polygon points="{area}" fill="rgba(11,71,119,.14)"/>',
-        f'<polyline points="{line}" fill="none" stroke="#0b4777" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>',
+        f'<polygon points="{area}" fill="rgba(37,99,235,.14)"/>',
+        f'<polyline points="{line}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>',
     ]
     for (label, value), (x, y) in zip(points, coords):
         parts.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#fff" stroke="#0b4777" stroke-width="2"/>'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#fff" stroke="#2563eb" stroke-width="2"/>'
             f'<text x="{x:.1f}" y="{height - bottom + 16}" text-anchor="middle" font-size="11" fill="#475569">{_esc(label)}</text>'
         )
     return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Reports received per day" style="width:100%;height:auto">{"".join(parts)}</svg>'
@@ -478,52 +489,146 @@ _BASE_CSS = """
 .mka-hero-track{width:100%;height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-bottom:12px}
 .mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
 
-/* Submit page high-contrast readability */
-.mka-submit-header h1{color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.75) !important;margin-bottom:4px !important;}
-.mka-submit-sub{color:#f1f5f9 !important;font-size:15px !important;font-weight:500 !important;text-shadow:0 1px 6px rgba(0,0,0,0.75) !important;margin-bottom:14px !important;}
-[data-testid="stVerticalBlockBorderWrapper"]{background:rgba(10,25,47,0.86) !important;border:1px solid rgba(197,228,255,0.45) !important;border-radius:16px !important;color:#ffffff !important;}
-[data-testid="stVerticalBlockBorderWrapper"] h3,
-[data-testid="stVerticalBlockBorderWrapper"] p,
-[data-testid="stVerticalBlockBorderWrapper"] span,
-[data-testid="stVerticalBlockBorderWrapper"] label{color:#f8fafc !important;}
+/* High-contrast page headers, location banner, text & labels */
+.mka-page-header h1{color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.9) !important;margin-bottom:4px !important;}
+.mka-page-sub{color:#f8fafc !important;-webkit-text-fill-color:#f8fafc !important;font-size:15px !important;font-weight:600 !important;text-shadow:0 1px 6px rgba(0,0,0,0.9) !important;margin-bottom:14px !important;}
+.mka-loc-banner{display:flex;align-items:center;gap:8px;background:#09192f !important;border:1px solid #4ade80 !important;border-left:5px solid #4ade80 !important;border-radius:12px !important;padding:11px 16px !important;margin:10px 0 14px 0 !important;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-size:15px !important;font-weight:700 !important;box-shadow:0 6px 18px rgba(0,0,0,0.4) !important;opacity:1 !important;}
+.mka-loc-banner .mka-loc-place{color:#86efac !important;-webkit-text-fill-color:#86efac !important;font-weight:800 !important;}
+.mka-loc-banner .mka-loc-coords{color:#f8fafc !important;-webkit-text-fill-color:#f8fafc !important;font-weight:600 !important;}
+.mka-loc-banner.info{border-color:#60a5fa !important;border-left-color:#60a5fa !important;}
+.mka-track-card{background:#09192f !important;border:1px solid rgba(197,228,255,0.55) !important;border-radius:16px !important;padding:18px 20px !important;margin-top:14px !important;color:#ffffff !important;box-shadow:0 8px 24px rgba(0,0,0,0.45) !important;}
+.mka-track-row{font-size:15px;line-height:1.6;margin:6px 0;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;}
+.mka-track-row b{color:#93c5fd !important;-webkit-text-fill-color:#93c5fd !important;}
+.mka-track-notes{margin-top:10px;padding:10px 14px;border-radius:10px;background:#153258 !important;border-left:4px solid #60a5fa !important;color:#ffffff !important;-webkit-text-fill-color:#ffffff !important;font-size:14px;}
+
+/* Solid dark card for voice block & crisp text even without selection */
+.stVerticalBlockBorderWrapper,
+[data-testid="stVerticalBlockBorderWrapper"],
+.stVerticalBlockBorderWrapper > div,
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background-color: #09192f !important;
+    border-radius: 16px !important;
+    border-color: rgba(197, 228, 255, 0.55) !important;
+    opacity: 1 !important;
+}
+
+.stVerticalBlockBorderWrapper :is(h1, h2, h3, h4, p, span, label, div, small, a),
+[data-testid="stVerticalBlockBorderWrapper"] :is(h1, h2, h3, h4, p, span, label, div, small, a),
+[data-testid="stExpander"] :is(h1, h2, h3, h4, p, span, label, div, small, a, summary) {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    mix-blend-mode: normal !important;
+}
+
+.stVerticalBlockBorderWrapper [data-testid="stCaptionContainer"] *,
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] *,
+[data-testid="stCaptionContainer"] *,
+.stCaption * {
+    color: #e2e8f0 !important;
+    -webkit-text-fill-color: #e2e8f0 !important;
+    opacity: 1 !important;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85) !important;
+}
+
+/* Radio buttons & labels */
+div[role="radiogroup"] label,
+div[role="radiogroup"] label *,
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 600 !important;
+}
+
+/* Expander container */
+[data-testid="stExpander"],
+[data-testid="stExpander"] details,
 [data-testid="stExpander"] summary,
-[data-testid="stExpander"] summary span,
-[data-testid="stExpander"] p{color:#f8fafc !important;}
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background-color: #0e2442 !important;
+    border-color: rgba(197, 228, 255, 0.4) !important;
+    opacity: 1 !important;
+}
 
-[data-testid="stWidgetLabel"] p{color:#ffffff !important;font-weight:600 !important;text-shadow:0 1px 4px rgba(0,0,0,0.65) !important;}
-
-/* Light mode readability: override dark-mode text colours only when Light is selected. */
-html[data-theme="light"] .mka-submit-header h1,
-html[data-theme="light"] .mka-panel-title,
-html[data-theme="light"] .mka-section {
-    color:#172033 !important;
-    text-shadow:none !important;
+/* Form field labels & markdown text */
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] *,
+.stWidgetLabel,
+.stWidgetLabel * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.85) !important;
 }
-html[data-theme="light"] .mka-submit-sub {
-    color:#334155 !important;
-    text-shadow:none !important;
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span {
+    color: #f8fafc;
 }
-html[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] {
-    background:rgba(255,255,255,0.94) !important;
-    border:1px solid rgba(71,85,105,0.25) !important;
-    color:#172033 !important;
+/* Light-mode readability fix: override the dark-mode text styles above. */
+/* Streamlit may place the active theme attribute on html or body. */
+:where(html, body)[data-theme="light"] .mka-page-header h1,
+:where(html, body)[data-theme="light"] .mka-panel-title,
+:where(html, body)[data-theme="light"] .mka-section,
+:where(html, body)[data-theme="light"] .mka-page-sub {
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    text-shadow: none !important;
 }
-html[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] h3,
-html[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] p,
-html[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] span,
-html[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] label,
-html[data-theme="light"] [data-testid="stExpander"] summary,
-html[data-theme="light"] [data-testid="stExpander"] summary span,
-html[data-theme="light"] [data-testid="stExpander"] p,
-html[data-theme="light"] [data-testid="stWidgetLabel"] p {
-    color:#172033 !important;
-    text-shadow:none !important;
+:where(html, body)[data-theme="light"] .stVerticalBlockBorderWrapper,
+:where(html, body)[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"],
+:where(html, body)[data-theme="light"] .stVerticalBlockBorderWrapper > div,
+:where(html, body)[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] > div {
+    background-color: rgba(255,255,255,0.97) !important;
+    border-color: rgba(71,85,105,0.28) !important;
 }
-html[data-theme="light"] .mka-legend {
-    color:#334155 !important;
+:where(html, body)[data-theme="light"] .stVerticalBlockBorderWrapper :is(h1,h2,h3,h4,p,span,label,div,small,a),
+:where(html, body)[data-theme="light"] [data-testid="stVerticalBlockBorderWrapper"] :is(h1,h2,h3,h4,p,span,label,div,small,a),
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] :is(h1,h2,h3,h4,p,span,label,div,small,a,summary),
+:where(html, body)[data-theme="light"] [data-testid="stWidgetLabel"],
+:where(html, body)[data-theme="light"] [data-testid="stWidgetLabel"] *,
+:where(html, body)[data-theme="light"] .stWidgetLabel,
+:where(html, body)[data-theme="light"] .stWidgetLabel *,
+:where(html, body)[data-theme="light"] div[role="radiogroup"] label,
+:where(html, body)[data-theme="light"] div[role="radiogroup"] label *,
+:where(html, body)[data-theme="light"] [data-testid="stRadio"] label,
+:where(html, body)[data-theme="light"] [data-testid="stRadio"] label *,
+:where(html, body)[data-theme="light"] [data-testid="stMarkdownContainer"] p,
+:where(html, body)[data-theme="light"] [data-testid="stMarkdownContainer"] li,
+:where(html, body)[data-theme="light"] [data-testid="stMarkdownContainer"] span {
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    text-shadow: none !important;
 }
-html[data-theme="light"] .mka-card-head {
-    color:#172033 !important;
+:where(html, body)[data-theme="light"] [data-testid="stCaptionContainer"] *,
+:where(html, body)[data-theme="light"] .stCaption * {
+    color: #475569 !important;
+    -webkit-text-fill-color: #475569 !important;
+    text-shadow: none !important;
+}
+:where(html, body)[data-theme="light"] [data-testid="stExpander"],
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] details,
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] summary,
+:where(html, body)[data-theme="light"] [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background-color: #f8fafc !important;
+    border-color: rgba(71,85,105,0.28) !important;
+}
+:where(html, body)[data-theme="light"] .mka-loc-banner,
+:where(html, body)[data-theme="light"] .mka-track-card {
+    background: #f8fafc !important;
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    border-color: #64748b !important;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.10) !important;
+}
+:where(html, body)[data-theme="light"] .mka-loc-banner *,
+:where(html, body)[data-theme="light"] .mka-track-card * {
+    color: #172033 !important;
+    -webkit-text-fill-color: #172033 !important;
+    text-shadow: none !important;
 }
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
@@ -842,9 +947,9 @@ def render_submit() -> None:
     _inject(_BASE_CSS)
     st.markdown(
         """
-        <div class="mka-submit-header">
+        <div class="mka-page-header">
             <h1>📝 Submit a Complaint</h1>
-            <div class="mka-submit-sub">Type a village or area name (like Chennai or Saidapet) to auto-fill coordinates, or click the map to pin a spot.</div>
+            <div class="mka-page-sub">Type any village, town, or area name below to locate it on the map, or click directly on the map to pin a spot.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -855,27 +960,84 @@ def render_submit() -> None:
         st.session_state["mka_location_name"] = ""
         st.session_state["mka_category"] = COMPLAINT_CATEGORIES[0]
     st.session_state.setdefault("mka_description", "")
+    st.session_state.setdefault("mka_location_name", "")
 
     flash = st.session_state.pop("mka_submit_flash", None)
     if flash:
         st.success(flash)
 
-    default_lat, default_lon = DEFAULT_MAP_CENTER
+    current_loc_text = _text(st.session_state.get("mka_location_name"))
+    typed_lat, typed_lon = resolve_coordinates(current_loc_text) if current_loc_text else (None, None)
+
     selected_lat, selected_lon = None, None
+    prev_click = st.session_state.get("mka_map_clicked")
+    if isinstance(prev_click, tuple) and len(prev_click) == 2:
+        selected_lat, selected_lon = prev_click
+
+    if selected_lat is not None and selected_lon is not None:
+        map_center = (selected_lat, selected_lon)
+        map_zoom = 15
+    elif typed_lat is not None and typed_lon is not None:
+        map_center = (typed_lat, typed_lon)
+        map_zoom = 14
+    else:
+        map_center = DEFAULT_MAP_CENTER
+        map_zoom = 12
 
     if folium is not None and st_folium is not None:
-        m = folium.Map(location=[default_lat, default_lon], zoom_start=12)
+        m = folium.Map(location=[map_center[0], map_center[1]], zoom_start=map_zoom)
         m.add_child(folium.LatLngPopup())
-        map_data = st_folium(m, height=320, use_container_width=True, key="submit_map")
+
+        if typed_lat is not None and typed_lon is not None:
+            folium.Marker(
+                location=[typed_lat, typed_lon],
+                tooltip=f"Located: {current_loc_text}",
+                popup=f"<b>{_esc(current_loc_text)}</b><br>Lat: {typed_lat:.5f}, Lon: {typed_lon:.5f}",
+                icon=folium.Icon(color="blue", icon="map-marker"),
+            ).add_to(m)
+
+        if selected_lat is not None and selected_lon is not None:
+            folium.Marker(
+                location=[selected_lat, selected_lon],
+                tooltip="Pinned Spot",
+                popup=f"Pinned Spot<br>Lat: {selected_lat:.5f}, Lon: {selected_lon:.5f}",
+                icon=folium.Icon(color="red", icon="info-sign"),
+            ).add_to(m)
+
+        map_data = st_folium(m, height=340, use_container_width=True, key="submit_map")
         if map_data and map_data.get("last_clicked"):
-            selected_lat = map_data["last_clicked"]["lat"]
-            selected_lon = map_data["last_clicked"]["lng"]
-            st.success(f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
+            clicked_lat = _coord(map_data["last_clicked"].get("lat"), -90, 90)
+            clicked_lon = _coord(map_data["last_clicked"].get("lng"), -180, 180)
+            if clicked_lat is not None and clicked_lon is not None:
+                if (clicked_lat, clicked_lon) != (selected_lat, selected_lon):
+                    selected_lat, selected_lon = clicked_lat, clicked_lon
+                    st.session_state["mka_map_clicked"] = (clicked_lat, clicked_lon)
+                    st.rerun()
+
+        if selected_lat is not None and selected_lon is not None:
+            st.markdown(
+                f'<div class="mka-loc-banner">📍 <span class="mka-loc-coords">Pinned Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}</span></div>',
+                unsafe_allow_html=True,
+            )
+        elif typed_lat is not None and typed_lon is not None:
+            st.markdown(
+                f'<div class="mka-loc-banner">📍 Located \'<span class="mka-loc-place">{_esc(current_loc_text)}</span>\': <span class="mka-loc-coords">Lat {typed_lat:.5f}, Lon {typed_lon:.5f}</span></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="mka-loc-banner info">🗺️ <span class="mka-loc-coords">Click anywhere on the map to pin coordinates, or enter a Village / Area Name below.</span></div>',
+                unsafe_allow_html=True,
+            )
 
     _render_voice_input()
 
     category = st.selectbox("Category", COMPLAINT_CATEGORIES, key="mka_category")
-    location_name = st.text_input("Village / Area Name", placeholder="e.g., Chennai, Saidapet", key="mka_location_name")
+    location_name = st.text_input(
+        "Village / Area Name",
+        placeholder="Type any area, town, or village (e.g., Velachery, Avadi, Madurai, Kanchipuram)",
+        key="mka_location_name",
+    )
     description = st.text_area(
         "Complaint Details",
         height=150,
@@ -887,8 +1049,8 @@ def render_submit() -> None:
         if not description.strip():
             st.error("Please provide complaint details using voice or text.")
         else:
-            final_lat, final_lon = selected_lat, selected_lon
             clean_loc = location_name.strip()
+            final_lat, final_lon = selected_lat, selected_lon
             if (final_lat is None or final_lon is None) and clean_loc:
                 auto_lat, auto_lon = resolve_coordinates(clean_loc)
                 if auto_lat is not None and auto_lon is not None:
@@ -914,24 +1076,49 @@ def render_submit() -> None:
                     f"Complaint registered successfully! Tracking ID: **{trk_id}**{coord_msg}"
                 )
                 st.session_state["mka_clear_form"] = True
+                st.session_state.pop("mka_map_clicked", None)
                 st.rerun()
 
 
 def render_tracking() -> None:
-    st.title("🔎 Track Complaint Status")
-    tracking_id = st.text_input("Enter your Tracking ID").strip()
+    _inject(_BASE_CSS)
+    st.markdown(
+        """
+        <div class="mka-page-header">
+            <h1>🔎 Track Complaint Status</h1>
+            <div class="mka-page-sub">Enter your Tracking ID (for example, MKAI-123456) to check live complaint progress.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    tracking_id = st.text_input("Enter your Tracking ID", placeholder="e.g., MKAI-855485", key="mka_track_input").strip()
     if tracking_id:
         records = get_complaint_by_tracking_id(tracking_id)
         if records:
             for item in records:
                 r = normalise_record(item)
-                st.success(f"Tracking ID: {r['_tracking_id']}")
-                st.write(f"**Status:** {r['_status']}")
-                st.write(f"**Category:** {r['_category']}")
-                st.write(f"**Location:** {r['_location']}")
-                st.write(f"**Description:** {r['_description']}")
-                if r["_resolution_notes"]:
-                    st.info(f"**Resolution Notes:** {r['_resolution_notes']}")
+                notes_html = (
+                    f'<div class="mka-track-notes"><b>Resolution Notes:</b> {_esc(r["_resolution_notes"])}</div>'
+                    if r["_resolution_notes"]
+                    else ""
+                )
+                st.markdown(
+                    f"""
+                    <div class="mka-track-card">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+                            <span style="font-size:18px;font-weight:800;color:#ffffff;">🎫 {_esc(r['_tracking_id'])}</span>
+                            {_pill(r)}
+                        </div>
+                        <div class="mka-track-row"><b>Status:</b> {_esc(r['_status'])}</div>
+                        <div class="mka-track-row"><b>Category:</b> {_esc(r['_category'])}</div>
+                        <div class="mka-track-row"><b>Location:</b> {_esc(r['_location'])}</div>
+                        <div class="mka-track-row"><b>Description:</b> {_esc(r['_description']) or '—'}</div>
+                        <div class="mka-track-row"><b>Reported On:</b> {_esc(_date_label(r, True))}</div>
+                        {notes_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
         else:
             st.warning("No complaint found matching that Tracking ID.")
 
@@ -1006,6 +1193,7 @@ def _init_admin_state() -> None:
     st.session_state.setdefault("mka_failed_attempts", 0)
     st.session_state.setdefault("mka_lockout_until", 0.0)
     st.session_state.setdefault("mka_admin_authenticated", False)
+    st.session_state.setdefault("mka_show_admin_noti", False)
 
 
 def _keys_match(supplied: str, expected: str) -> bool:
@@ -1072,55 +1260,57 @@ def _render_admin_login() -> None:
 
 
 def _render_admin_notifications(records: list[dict]) -> None:
-    """Shows live notifications inside the Admin Dashboard once logged in."""
-    if not records:
-        st.info("🔔 **Admin Notifications:** No complaints in the system yet.")
-        return
-
+    """Single Notifications button; clicking it expands/collapses all notifications."""
     pending_rows = [r for r in records if r["_bucket"] == "Pending"]
     progress_rows = [r for r in records if r["_bucket"] == "In Progress"]
+    resolved_rows = [r for r in records if r["_bucket"] == "Resolved"]
     missing_coords = [
         r for r in records
         if r["_bucket"] != "Resolved" and (r.get("_latitude") is None or r.get("_longitude") is None)
     ]
 
-    alerts: list[str] = []
-    if pending_rows:
-        alerts.append(
-            f"🆕 <b>{len(pending_rows)} Pending / New Complaint(s)</b> need review or status update."
-        )
-    if progress_rows:
-        alerts.append(
-            f"⏳ <b>{len(progress_rows)} Complaint(s) In Progress</b> currently being handled."
-        )
+    total_alerts = len(pending_rows) + len(progress_rows) + len(missing_coords)
+    btn_label = f"🔔 Notifications ({total_alerts})" if total_alerts else "🔔 Notifications (0)"
+
+    btn_col, _ = st.columns([2.2, 5.8])
+    with btn_col:
+        if st.button(btn_label, use_container_width=True, key="mka_admin_noti_btn"):
+            st.session_state["mka_show_admin_noti"] = not st.session_state.get("mka_show_admin_noti", False)
+
+    if not st.session_state.get("mka_show_admin_noti", False):
+        return
+
+    if not records:
+        st.info("No complaints in the system yet.")
+        return
+
+    summary_lines = [
+        f"<div style='font-size:14px;margin:4px 0;color:#fff;'>🆕 <b>{len(pending_rows)} Pending / New</b> complaint(s) awaiting action.</div>",
+        f"<div style='font-size:14px;margin:4px 0;color:#fff;'>⏳ <b>{len(progress_rows)} In Progress</b> complaint(s) currently active.</div>",
+        f"<div style='font-size:14px;margin:4px 0;color:#fff;'>✅ <b>{len(resolved_rows)} Resolved</b> complaint(s) completed.</div>",
+    ]
     if missing_coords:
-        alerts.append(
-            f"📍 <b>{len(missing_coords)} Active Complaint(s)</b> have no map coordinates yet."
+        summary_lines.append(
+            f"<div style='font-size:14px;margin:4px 0;color:#fde68a;'>📍 <b>{len(missing_coords)} Active</b> complaint(s) have no map coordinates yet.</div>"
         )
 
-    recent_items = "".join(
-        f"<div style='font-size:13px;line-height:1.45;margin:5px 0;color:#e2e8f0;'>"
+    all_items = "".join(
+        f"<div style='font-size:13px;line-height:1.5;margin:6px 0;padding:6px 8px;border-radius:8px;background:#1e293b;color:#f8fafc;'>"
         f"• <b>{_esc(r['_tracking_id'])}</b> — {_esc(r['_category'])} "
-        f"({_esc(r['_location'])}) · {_pill(r)} · <span>{_esc(_date_label(r, True))}</span></div>"
-        for r in records[:4]
-    )
-
-    summary_html = (
-        "".join(f"<div style='font-size:14px;margin:4px 0;color:#fff;'>{a}</div>" for a in alerts)
-        if alerts
-        else "<div style='font-size:14px;color:#bbf7d0;'>✅ All complaints are resolved and up to date!</div>"
+        f"({_esc(r['_location'])}) · {_pill(r)} · <span style='color:#cbd5e1;'>{_esc(_date_label(r, True))}</span></div>"
+        for r in records
     )
 
     st.markdown(
         f"""
-        <div class="mka-card" style="background:#0f172a;color:#f8fafc;border:1px solid rgba(148,163,184,0.35);margin-bottom:14px;">
+        <div class="mka-card" style="background:#0f172a;color:#f8fafc;border:1px solid rgba(148,163,184,0.4);margin:10px 0 14px 0;">
             <div class="mka-card-head" style="color:#ffffff;margin-bottom:8px;">
-                <span>🔔 Admin Notifications</span>
-                <small style="background:#1e293b;color:#93c5fd;">{len(pending_rows)} Pending</small>
+                <span>🔔 All Admin Notifications</span>
+                <small style="background:#1e293b;color:#93c5fd;">{len(records)} Total</small>
             </div>
-            {summary_html}
-            <div style="font-size:12px;font-weight:700;color:#94a3b8;margin:12px 0 4px;">LATEST ACTIVITY</div>
-            {recent_items}
+            {"".join(summary_lines)}
+            <div style="font-size:12px;font-weight:700;color:#94a3b8;margin:12px 0 6px;">ALL COMPLAINT UPDATES</div>
+            <div style="max-height:280px;overflow-y:auto;">{all_items}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1182,6 +1372,7 @@ def render_admin() -> None:
     with top_r:
         if st.button("Log out", use_container_width=True, key="mka_admin_logout"):
             st.session_state["mka_admin_authenticated"] = False
+            st.session_state["mka_show_admin_noti"] = False
             st.rerun()
 
     records = _load_records()
