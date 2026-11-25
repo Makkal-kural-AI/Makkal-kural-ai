@@ -1,30 +1,22 @@
 """
 Makkal Kural AI — UI Dashboard Modules
-Exports: render_submit(), render_tracking(), render_public(), render_admin()
-
-This module only defines functions. Importing it never renders anything and it
-never calls st.set_page_config() — app.py owns the page configuration.
-
-Voice input (no paid API, no API key):
-  1. Primary  — browser speech recognition via streamlit-mic-recorder
-                (Web Speech API, Tamil ta-IN / English en-IN).
-  2. Backup   — local Whisper (openai-whisper package) running on this server
-                with st.audio_input(). No OpenAI API is ever called.
+Exports:
+  render_submit(), render_tracking(), render_public(), render_admin(),
+  render_notifications_banner(), render_notifications_page()
 """
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import html
+import json
 import math
-import os
 import secrets
-import tempfile
-import threading
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import streamlit as st
 from custom_otp_component import otp_input
@@ -44,38 +36,25 @@ except ImportError:
     folium = None
     st_folium = None
 
-try:
-    from streamlit_mic_recorder import speech_to_text
-except ImportError:
-    speech_to_text = None
-
 # --------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------
 
 STATUSES = ["Submitted", "Pending", "In Progress", "Resolved"]
+COMPLAINT_CATEGORIES = [
+    "Water Supply",
+    "Garbage",
+    "Road Damage",
+    "Drainage",
+    "Electricity",
+    "Other",
+]
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_SECONDS = 60
 IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_MAP_CENTER = (13.0827, 80.2707)  # Chennai
 MAX_MAP_MARKERS = 1000
 PUBLIC_TABLE_ROWS = 60
-
-# Voice input languages: browser recognition code and Whisper language code.
-VOICE_LANGUAGES = {
-    "தமிழ் (Tamil)": {"browser": "ta-IN", "whisper": "ta"},
-    "English": {"browser": "en-IN", "whisper": "en"},
-}
-# Local Whisper model. "tiny" is the smallest multilingual model. It can be
-# changed with the optional WHISPER_MODEL setting (tiny, base or small).
-WHISPER_MODELS = ("tiny", "base", "small")
-MAX_AUDIO_BYTES = 15 * 1024 * 1024
-_WHISPER_LOCK = threading.Lock()  # the shared model is used by one request at a time
-
-COMPLAINT_CATEGORIES = ["Water Supply", "Garbage", "Road Damage", "Drainage", "Electricity", "Other"]
-
-# Citizens may write names or phone numbers in the free-text description, so it
-# is hidden on the public page and its map. Admins always see it.
 PUBLIC_SHOW_DESCRIPTION = False
 
 _PENDING = {"pending", "new", "submitted", "open", "registered"}
@@ -90,14 +69,35 @@ BUCKET_COLORS = {
 }
 CHART_COLORS = ["#2563eb", "#38bdf8", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b"]
 
+# Fast offline/instant coordinates for common localities (case-insensitive keys)
+KNOWN_LOCATIONS: dict[str, tuple[float, float]] = {
+    "chennai": (13.0827, 80.2707),
+    "saidapet": (13.0231, 80.2206),
+    "guindy": (13.0067, 80.2206),
+    "kodambakkam": (13.0524, 80.2255),
+    "t nagar": (13.0418, 80.2341),
+    "t. nagar": (13.0418, 80.2341),
+    "adyar": (13.0012, 80.2565),
+    "mylapore": (13.0339, 80.2676),
+    "velachery": (12.9815, 80.2180),
+    "anna nagar": (13.0850, 80.2101),
+    "tambaram": (12.9249, 80.1000),
+    "chromepet": (12.9516, 80.1462),
+    "porur": (13.0382, 80.1566),
+    "madurai": (9.9252, 78.1198),
+    "coimbatore": (11.0168, 76.9558),
+    "trichy": (10.7905, 78.7047),
+    "salem": (11.6643, 78.1460),
+    "tirunelveli": (8.7139, 77.7567),
+}
+
 
 # --------------------------------------------------------------------------
-# Data helpers
+# Data & Geocoding helpers
 # --------------------------------------------------------------------------
 
 
 def _text(value, default: str = "") -> str:
-    """Convert a database value to clean text; None / NaN become `default`."""
     if value is None:
         return default
     if isinstance(value, float) and math.isnan(value):
@@ -122,6 +122,39 @@ def _first_coord(row: dict, names: tuple, low: float, high: float):
         if number is not None:
             return number
     return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def resolve_coordinates(place_name: str) -> tuple[float | None, float | None]:
+    """Resolve latitude and longitude from a village/area/city name."""
+    cleaned = " ".join(_text(place_name).split())
+    if not cleaned or cleaned.lower() in {"not provided", "unspecified", "none", "na", "n/a"}:
+        return None, None
+
+    key = cleaned.casefold()
+    if key in KNOWN_LOCATIONS:
+        return KNOWN_LOCATIONS[key]
+
+    for known_key, coords in KNOWN_LOCATIONS.items():
+        if known_key in key or key in known_key:
+            return coords
+
+    # Fallback lookup via OpenStreetMap Nominatim if online
+    try:
+        query = quote(f"{cleaned}, Tamil Nadu, India")
+        url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1"
+        req = Request(url, headers={"User-Agent": "MakkalKuralAI/1.0"})
+        with urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data:
+                lat = _coord(data[0].get("lat"), -90, 90)
+                lon = _coord(data[0].get("lon"), -180, 180)
+                if lat is not None and lon is not None:
+                    return lat, lon
+    except Exception:
+        pass
+
+    return None, None
 
 
 def _parse_dt(value):
@@ -149,7 +182,7 @@ def status_bucket(status: str) -> str:
 
 
 def normalise_record(row: dict) -> dict:
-    """Normalises field names so tables, filters and maps never see None/NaN."""
+    """Normalises field names and auto-fills coordinates from location if missing."""
     lat = _first_coord(row, ("latitude", "lat"), -90, 90)
     lon = _first_coord(row, ("longitude", "lng", "lon"), -180, 180)
     if lat is None or lon is None or (lat == 0 and lon == 0):
@@ -159,6 +192,14 @@ def normalise_record(row: dict) -> dict:
     district = _text(row.get("district"))
     village = _text(row.get("village"))
     region = district or village or (location if location != "Not provided" else "")
+
+    # Automatically resolve coordinates for existing complaints that only have a location name
+    if lat is None or lon is None:
+        lookup_place = village or location or district
+        auto_lat, auto_lon = resolve_coordinates(lookup_place)
+        if auto_lat is not None and auto_lon is not None:
+            lat, lon = auto_lat, auto_lon
+
     status = _text(row.get("status"), "Pending")
     created = _parse_dt(row.get("created_at"))
 
@@ -186,7 +227,6 @@ def _date_label(record: dict, with_time: bool = False) -> str:
 
 
 def _load_records() -> list[dict] | None:
-    """Load and normalise complaints; shows an error and returns None on failure."""
     if not database_configured():
         st.warning(
             "The database is not configured. Set SUPABASE_URL and "
@@ -201,7 +241,6 @@ def _load_records() -> list[dict] | None:
 
 
 def _group_counts(values: list[str]) -> list[tuple[str, int]]:
-    """Count values ignoring case, most common first."""
     labels: dict[str, str] = {}
     counts: Counter = Counter()
     for value in values:
@@ -209,10 +248,6 @@ def _group_counts(values: list[str]) -> list[tuple[str, int]]:
         labels.setdefault(key, value)
         counts[key] += 1
     return [(labels[key], n) for key, n in counts.most_common()]
-
-
-def _region_options(records: list[dict]) -> list[str]:
-    return [label for label, _ in _group_counts([r["_region"] for r in records])][:60]
 
 
 def _matches(record: dict, needle: str, include_description: bool) -> bool:
@@ -225,7 +260,7 @@ def _matches(record: dict, needle: str, include_description: bool) -> bool:
 
 
 # --------------------------------------------------------------------------
-# HTML / SVG building blocks (all dynamic text is escaped)
+# HTML / SVG building blocks
 # --------------------------------------------------------------------------
 
 
@@ -244,124 +279,6 @@ def _pill(record: dict) -> str:
     return f'<span class="mka-pill {css}">{_esc(record["_status"])}</span>'
 
 
-def _axis(max_value: int) -> tuple[int, int]:
-    """Return (step, top) for a y-axis with about four intervals."""
-    raw = max(max_value, 1) / 4
-    magnitude = 10 ** math.floor(math.log10(raw))
-    step = magnitude
-    for factor in (1, 2, 5, 10):
-        step = factor * magnitude
-        if raw <= step:
-            break
-    step = int(max(1, step))
-    return step, step * math.ceil(max(max_value, 1) / step)
-
-
-def _chart_frame(top: int, step: int, width: int, height: int, left: int, right: int, ptop: int, bottom: int) -> str:
-    parts = []
-    plot_h = height - ptop - bottom
-    for tick in range(0, top + 1, step):
-        y = ptop + plot_h - plot_h * tick / top
-        parts.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#e5eaf2" stroke-width="1"/>'
-            f'<text x="{left - 6}" y="{y + 4:.1f}" text-anchor="end" font-size="11" fill="#64748b">{tick}</text>'
-        )
-    return "".join(parts)
-
-
-def _bar_chart_svg(items: list[tuple[str, int]]) -> str:
-    if not items:
-        return '<div class="mka-empty-chart">No data yet</div>'
-    width, height, left, right, ptop, bottom = 420, 230, 38, 10, 16, 40
-    step, top = _axis(max(v for _, v in items))
-    plot_h = height - ptop - bottom
-    slot = (width - left - right) / len(items)
-    bar_w = min(48, slot * 0.58)
-    parts = [_chart_frame(top, step, width, height, left, right, ptop, bottom)]
-    for i, (label, value) in enumerate(items):
-        x = left + slot * i + (slot - bar_w) / 2
-        h = plot_h * value / top
-        y = ptop + plot_h - h
-        color = CHART_COLORS[i % len(CHART_COLORS)]
-        parts.append(
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{h:.1f}" rx="3" fill="{color}"/>'
-            f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">{value}</text>'
-            f'<text x="{x + bar_w / 2:.1f}" y="{height - bottom + 16}" text-anchor="middle" font-size="11" fill="#475569">{_esc(_shorten(label, 12))}</text>'
-        )
-    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Complaints by category" style="width:100%;height:auto">{"".join(parts)}</svg>'
-
-
-def _line_chart_svg(points: list[tuple[str, int]]) -> str:
-    if not points or not any(v for _, v in points):
-        return '<div class="mka-empty-chart">No dated reports in this period</div>'
-    width, height, left, right, ptop, bottom = 420, 230, 38, 26, 16, 40
-    step, top = _axis(max(v for _, v in points))
-    plot_h = height - ptop - bottom
-    plot_w = width - left - right
-    n = len(points)
-    coords = []
-    for i, (_, value) in enumerate(points):
-        x = left + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
-        y = ptop + plot_h - plot_h * value / top
-        coords.append((x, y))
-    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    base = ptop + plot_h
-    area = f"{coords[0][0]:.1f},{base} {line} {coords[-1][0]:.1f},{base}"
-    parts = [
-        _chart_frame(top, step, width, height, left, right, ptop, bottom),
-        f'<polygon points="{area}" fill="rgba(37,99,235,.14)"/>',
-        f'<polyline points="{line}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>',
-    ]
-    for (label, value), (x, y) in zip(points, coords):
-        parts.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#fff" stroke="#2563eb" stroke-width="2"/>'
-            f'<text x="{x:.1f}" y="{height - bottom + 16}" text-anchor="middle" font-size="11" fill="#475569">{_esc(label)}</text>'
-        )
-    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Reports received per day" style="width:100%;height:auto">{"".join(parts)}</svg>'
-
-
-def _donut_svg(percent: int) -> str:
-    radius = 34
-    circumference = 2 * math.pi * radius
-    arc = ""
-    if percent > 0:
-        arc = (
-            f'<circle cx="42" cy="42" r="{radius}" fill="none" stroke="#16a34a" stroke-width="9" '
-            f'stroke-linecap="round" stroke-dasharray="{circumference * percent / 100:.2f} {circumference:.2f}" '
-            f'transform="rotate(-90 42 42)"/>'
-        )
-    return (
-        '<svg viewBox="0 0 84 84" width="84" height="84" role="img" aria-label="Completion rate">'
-        f'<circle cx="42" cy="42" r="{radius}" fill="none" stroke="#e2e8f0" stroke-width="9"/>{arc}'
-        '<circle cx="42" cy="42" r="17" fill="#16a34a"/>'
-        '<path d="M34 42l6 6 11-12" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>'
-        "</svg>"
-    )
-
-
-def _kpi_html(total: int, pending: int, progress: int, resolved: int, rate: int) -> str:
-    return (
-        '<div class="mka-kpis">'
-        f'<div class="mka-kpi"><span>Total Reports</span><b>{total}</b></div>'
-        f'<div class="mka-kpi pending"><span>Pending</span><b>{pending}</b></div>'
-        f'<div class="mka-kpi progress"><span>In Progress</span><b>{progress}</b></div>'
-        f'<div class="mka-kpi resolved"><span>Resolved</span><b>{resolved}</b></div>'
-        f'<div class="mka-kpi donut">{_donut_svg(rate)}<div><b>{rate}%</b><span>Completion<br>Rate</span></div></div>'
-        "</div>"
-    )
-
-
-def _trend_points(records: list[dict], days: int = 7) -> tuple[list[tuple[str, int]], int]:
-    today = datetime.now(IST).date()
-    counts: Counter = Counter(r["_created_at"].date() for r in records if r["_created_at"] is not None)
-    points = []
-    for offset in range(days - 1, -1, -1):
-        day = today - timedelta(days=offset)
-        points.append((day.strftime("%d %b"), counts.get(day, 0)))
-    undated = sum(1 for r in records if r["_created_at"] is None)
-    return points, undated
-
-
 def _panel_title(icon: str, title: str, badge: str = "", badge_class: str = "") -> str:
     badge_html = f'<span class="mka-badge {badge_class}"><i></i>{_esc(badge)}</span>' if badge else ""
     return f'<div class="mka-panel-title"><span>{icon} {_esc(title)}</span>{badge_html}</div>'
@@ -371,37 +288,16 @@ def _panel_title(icon: str, title: str, badge: str = "", badge_class: str = "") 
 # CSS
 # --------------------------------------------------------------------------
 
-# The <style> block only exists while the page that emitted it is rendered, so
-# these rules cannot leak onto the Home, Submit or Tracking pages.
 _BASE_CSS = """
 <style>
 .mka-panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#fff;
-  font-size:clamp(21px,2.6vw,30px);font-weight:800;margin:4px 0 14px;text-shadow:0 2px 8px rgba(0,0,0,.6);
-  background:linear-gradient(100deg,#092b49,#173b5c);border:1px solid rgba(255,255,255,.2);
-  border-radius:12px;padding:15px 24px;min-height:58px}
-.st-key-mka_form_card{background:#f4f7fb;border-radius:16px;padding:18px 20px;box-shadow:0 12px 34px rgba(0,0,0,.35);margin-bottom:16px}
-.st-key-mka_form_card [data-testid="stWidgetLabel"] p,.st-key-mka_form_card h1,.st-key-mka_form_card h2,
-.st-key-mka_form_card h3,.st-key-mka_form_card [data-testid="stMarkdownContainer"] p,
-.st-key-mka_form_card [data-testid="stCaptionContainer"]{color:#0f172a !important;text-shadow:none}
+  font-size:clamp(21px,2.6vw,30px);font-weight:800;margin:4px 0 12px;text-shadow:0 2px 8px rgba(0,0,0,.6)}
 .mka-badge{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.14);color:#fff;
   border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:5px 13px;font-size:13px;font-weight:600;text-shadow:none}
 .mka-badge i{width:9px;height:9px;border-radius:50%;background:#f5a524;display:inline-block}
 .mka-badge.locked i{background:#ef4444}
-.mka-sheet{background:#f4f7fb;color:#0f172a;border-radius:16px;padding:16px;box-shadow:0 12px 34px rgba(0,0,0,.35);margin-bottom:16px}
-.mka-kpis{display:grid;grid-template-columns:repeat(4,1fr) 1.45fr;gap:12px;margin-bottom:14px}
-.mka-kpi{background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:4px}
-.mka-kpi span{font-size:13px;color:#475569}
-.mka-kpi b{font-size:34px;line-height:1.1;color:#0f172a}
-.mka-kpi.pending{background:#fde4e4}.mka-kpi.progress{background:#fdf0cf}.mka-kpi.resolved{background:#dcf3e1}
-.mka-kpi.donut{flex-direction:row;align-items:center;gap:12px}
-.mka-kpi.donut div{display:flex;flex-direction:column}
-.mka-kpi.donut b{font-size:28px}
-.mka-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.mka-card{background:#fff;color:#0f172a;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08)}
+.mka-card{background:#fff;color:#0f172a;border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(15,23,42,.08);margin-bottom:12px}
 .mka-card-head{display:flex;align-items:center;justify-content:space-between;font-weight:700;font-size:15px;margin-bottom:6px;color:#0f172a}
-.mka-card-head small{font-weight:600;font-size:11px;color:#475569;background:#eef2f7;border-radius:6px;padding:3px 8px}
-.mka-empty-chart{height:200px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:14px}
-.mka-note{color:#64748b;font-size:12px;margin-top:8px}
 .mka-tablewrap{overflow:auto;max-height:520px;border-radius:12px;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.1)}
 .mka-table{width:100%;border-collapse:collapse;font-size:13px;color:#0f172a;margin:0}
 .mka-table th{position:sticky;top:0;background:#f1f5f9;text-align:left;padding:9px 10px;font-weight:700;color:#334155;white-space:nowrap;border:0}
@@ -414,57 +310,141 @@ _BASE_CSS = """
 .mka-pill.resolved{background:#dcfce7;color:#15803d}.mka-pill.other{background:#e2e8f0;color:#475569}
 .mka-legend{display:flex;flex-wrap:wrap;gap:14px;color:#e6eefb;font-size:13px;margin:4px 0 8px}
 .mka-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
-.mka-section{color:#fff;font-size:20px;font-weight:800;margin:18px 0 8px;text-shadow:0 2px 8px rgba(0,0,0,.6)}
+.mka-noti-box{background:rgba(15,23,42,0.82);border:1.5px solid #86efac;border-radius:16px;padding:16px 18px;color:#f8fafc;margin:12px 0 8px;box-shadow:0 10px 28px rgba(0,0,0,0.35)}
+.mka-progress-bar-bg{width:100%;height:10px;background:rgba(255,255,255,0.2);border-radius:999px;overflow:hidden;margin:8px 0 12px}
+.mka-progress-bar-fill{height:100%;background:#22c55e;border-radius:999px}
 [data-testid="stWidgetLabel"] p{color:#e6eefb !important}
-@media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
 
-
 _LOGIN_CSS = """
 <style>
-
-/* Sunset background area */
 .st-key-mka_login_scene {
     background:
-        linear-gradient(
-            rgba(8, 27, 48, 0.10),
-            rgba(8, 27, 48, 0.20)
-        ),
+        linear-gradient(rgba(8, 27, 48, 0.10), rgba(8, 27, 48, 0.20)),
         url("https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1800&q=85");
-
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
-
     border: 1px solid rgba(255,255,255,0.35);
     border-radius: 16px;
-
     padding: 34px 16px;
     min-height: 420px;
-
     display: flex;
     align-items: center;
     justify-content: center;
 }
-
-/* Responsive */
-@media(max-width: 600px) {
-
-    .st-key-mka_login_scene {
-        padding: 20px 8px;
-        min-height: 380px;
-    }
-
+.mka-panel-title {
+    background: linear-gradient(100deg, #092b49, #173b5c);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 12px;
+    padding: 15px 24px;
+    margin: 0 0 14px;
+    min-height: 58px;
 }
-
 </style>
 """
 
 
-
 def _inject(*css: str) -> None:
     st.markdown("".join(css), unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------
+# Notifications & Completed Work
+# --------------------------------------------------------------------------
+
+
+def _build_progress_summary(records: list[dict]) -> tuple[int, int, int, list[dict]]:
+    total = len(records)
+    resolved_rows = [r for r in records if r["_bucket"] == "Resolved"]
+    resolved_count = len(resolved_rows)
+    pct = int(round((resolved_count / total) * 100)) if total > 0 else 0
+    return total, resolved_count, pct, resolved_rows[:4]
+
+
+def render_notifications_banner() -> None:
+    """Compact Notifications & Completed Work card shown above the proverb on Home."""
+    _inject(_BASE_CSS)
+    raw_rows, _ = fetch_complaints() if database_configured() else ([], None)
+    records = [normalise_record(r) for r in (raw_rows or [])]
+    total, resolved_count, pct, recent_resolved = _build_progress_summary(records)
+
+    if recent_resolved:
+        updates_html = "".join(
+            f"<div style='font-size:13px;margin:4px 0;'>• <b>Resolved:</b> {_esc(r['_category'])} "
+            f"({_esc(r['_location'])}) — {_esc(_shorten(r['_resolution_notes'] or r['_description'] or 'Completed', 85))} "
+            f"<span style='color:#cbd5e1;'>({_esc(_date_label(r))})</span></div>"
+            for r in recent_resolved
+        )
+    else:
+        updates_html = "<div style='font-size:13px;color:#cbd5e1;'>• Track live updates as complaints are resolved by local authorities.</div>"
+
+    categories_text = ", ".join(COMPLAINT_CATEGORIES)
+    st.markdown(
+        f"""
+        <div class="mka-noti-box">
+            <div style="font-size:17px;font-weight:800;margin-bottom:4px;">🔔 Notifications &amp; Completed Work</div>
+            <div style="font-size:14px;">Progress: <b>{resolved_count} of {total}</b> resolved (<b>{pct}%</b> complete)</div>
+            <div class="mka-progress-bar-bg"><div class="mka-progress-bar-fill" style="width:{pct}%;"></div></div>
+            {updates_html}
+            <div style="font-size:12px;color:#cbd5e1;margin-top:10px;border-top:1px solid rgba(255,255,255,0.15);padding-top:8px;">
+                <b>Complaints you can file:</b> {_esc(categories_text)}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_notifications_page() -> None:
+    """Dedicated Notifications & Completed Work view."""
+    _inject(_BASE_CSS)
+    st.markdown(_panel_title("🔔", "Notifications & Completed Work"), unsafe_allow_html=True)
+
+    records = _load_records()
+    if records is None:
+        return
+
+    total, resolved_count, pct, recent_resolved = _build_progress_summary(records)
+    in_progress_count = sum(1 for r in records if r["_bucket"] == "In Progress")
+    pending_count = sum(1 for r in records if r["_bucket"] == "Pending")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Complaints", total)
+    c2.metric("Completed / Resolved", resolved_count)
+    c3.metric("In Progress", in_progress_count)
+    c4.metric("Completion Rate", f"{pct}%")
+
+    st.progress(min(max(pct / 100.0, 0.0), 1.0))
+
+    st.markdown("<h4 style='color:white;'>✅ Completed Work Updates</h4>", unsafe_allow_html=True)
+    if recent_resolved:
+        for r in recent_resolved:
+            note = r["_resolution_notes"] or r["_description"] or "Issue resolved."
+            st.markdown(
+                f"""
+                <div class="mka-card">
+                    <div class="mka-card-head">
+                        <span>{_esc(r['_category'])} · {_esc(r['_location'])}</span>
+                        {_pill(r)}
+                    </div>
+                    <div style="font-size:13px;color:#334155;">{_esc(note)}</div>
+                    <div style="font-size:12px;color:#64748b;margin-top:4px;">ID: {_esc(r['_tracking_id'])} · {_esc(_date_label(r))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    else:
+        st.info("No completed work updates recorded yet.")
+
+    st.markdown("<h4 style='color:white;'>📝 Complaints You Can File</h4>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='mka-card'>"
+        + "".join(f"<div style='padding:4px 0;'>• <b>{_esc(cat)}</b></div>" for cat in COMPLAINT_CATEGORIES)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -486,7 +466,6 @@ def _popup_html(record: dict, show_description: bool) -> str:
 
 
 def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", show_description: bool = True) -> None:
-    """Folium map with one pin per complaint that has valid saved coordinates."""
     mappable = [r for r in rows if r.get("_latitude") is not None and r.get("_longitude") is not None]
     missing = len(rows) - len(mappable)
 
@@ -502,7 +481,7 @@ def show_map(rows: list[dict], height: int = 450, key: str = "complaint_map", sh
     for r in shown:
         folium.Marker(
             location=[r["_latitude"], r["_longitude"]],
-            tooltip=f'{r["_tracking_id"]} · {r["_category"]}',
+            tooltip=f'{r["_tracking_id"]} · {r["_category"]} ({r["_location"]})',
             popup=folium.Popup(_popup_html(r, show_description), max_width=280),
             icon=folium.Icon(color=BUCKET_COLORS.get(r["_bucket"], "gray"), icon="info-sign"),
         ).add_to(complaint_map)
@@ -538,172 +517,17 @@ def _legend_html() -> str:
 
 
 # --------------------------------------------------------------------------
-# Voice input (free: browser recognition + local Whisper, no API key)
-# --------------------------------------------------------------------------
-
-
-def _append_description(text: str) -> None:
-    """Add recognised speech to the description without replacing existing text."""
-    spoken = " ".join(_text(text).split())
-    if not spoken:
-        return
-    existing = _text(st.session_state.get("mka_description"))
-    st.session_state["mka_description"] = f"{existing} {spoken}" if existing else spoken
-
-
-def _whisper_model_name() -> str:
-    name = get_setting("WHISPER_MODEL", "tiny").lower()
-    return name if name in WHISPER_MODELS else "tiny"
-
-
-@st.cache_resource(show_spinner=False)
-def _load_whisper_model(name: str):
-    """Load the local Whisper model once per server process (CPU only).
-
-    The model weights are downloaded for free from the Whisper release files
-    the first time (the Dockerfile pre-downloads them at build time).
-    """
-    import whisper
-
-    return whisper.load_model(name, device="cpu")
-
-
-def _transcribe_local_whisper(audio_file, whisper_lang: str) -> str | None:
-    """Transcribe a recording with Whisper running on this server.
-
-    No OpenAI API, API key or network call is used for transcription. The
-    audio is written to a temporary file that is always deleted afterwards, and
-    only the resulting text is placed in the form.
-    """
-    if audio_file is None:
-        return None
-
-    audio_bytes = audio_file.getvalue()
-    if not audio_bytes:
-        st.warning("The recording is empty. Please record again.")
-        return None
-    if len(audio_bytes) > MAX_AUDIO_BYTES:
-        st.warning("The recording is too large. Please record a shorter message.")
-        return None
-
-    try:
-        import whisper  # noqa: F401  (checks the package is installed)
-    except ImportError:
-        st.error("Local Whisper is not installed on the server. Add 'openai-whisper' to requirements.txt.")
-        return None
-
-    temp_path = None
-    try:
-        with st.spinner("Processing your voice on the server… the first time may take a minute while the model loads."):
-            model = _load_whisper_model(_whisper_model_name())
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-                handle.write(audio_bytes)
-                temp_path = handle.name
-            with _WHISPER_LOCK:
-                result = model.transcribe(temp_path, language=whisper_lang, task="transcribe", fp16=False)
-        transcript = _text(result.get("text") if isinstance(result, dict) else "")
-        if not transcript:
-            st.warning("No speech was detected. Please record again or type your complaint.")
-            return None
-        return transcript
-    except FileNotFoundError:
-        st.error("Audio processing needs ffmpeg, which was not found on the server.")
-    except MemoryError:
-        st.error("The server ran out of memory while processing audio. Please type your complaint instead.")
-    except Exception as exc:
-        # Only the error type is shown, never internal details.
-        st.error(f"Voice processing failed ({type(exc).__name__}). Please try again or type your complaint.")
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-    return None
-
-
-def _render_voice_input() -> None:
-    """Microphone block. Must run before the description text area is created."""
-    with st.container(border=True):
-        st.markdown("### 🎙️ Speak your complaint")
-        lang_label = st.radio(
-            "Language / மொழி",
-            list(VOICE_LANGUAGES),
-            horizontal=True,
-            key="mka_voice_lang",
-        )
-        lang = VOICE_LANGUAGES[lang_label]
-
-        if speech_to_text is None:
-            st.warning(
-                "Browser voice input is not installed on the server (streamlit-mic-recorder). "
-                "You can use the recording option below or type your complaint."
-            )
-        else:
-            st.caption(
-                "Tap the microphone, allow microphone access if asked, speak, then tap Stop. "
-                "Your words are added to the Complaint Details box below."
-            )
-            spoken = speech_to_text(
-                language=lang["browser"],
-                start_prompt="🎙️ Tap to speak",
-                stop_prompt="⏹️ Listening… tap to stop",
-                just_once=True,
-                use_container_width=True,
-                key=f"mka_stt_{lang['browser']}",
-            )
-            if spoken:
-                _append_description(spoken)
-                st.success("Voice converted to text and added to Complaint Details below. You can edit it before submitting.")
-            st.caption(
-                "Works in Chrome, Edge and recent Safari over HTTPS. Firefox does not support it. "
-                "If nothing happens, click the lock icon beside the web address and allow the microphone, "
-                "or use the recording option below. Browser recognition is done by your browser vendor's "
-                "free speech service, not by this server."
-            )
-
-        with st.expander("Voice not working? Record here and convert it on the server (local Whisper)"):
-            st.caption(
-                "Free local speech recognition (no API key). Tamil accuracy with the small model is limited, "
-                "so please check the text before submitting."
-            )
-            audio_file = st.audio_input("Record your complaint", key="mka_voice_audio")
-            if audio_file is not None:
-                # Streamlit reruns often; only transcribe each new recording once.
-                signature = hashlib.sha256(audio_file.getvalue()).hexdigest() + lang["whisper"]
-                if st.session_state.get("mka_whisper_signature") != signature:
-                    st.session_state["mka_whisper_signature"] = signature
-                    transcript = _transcribe_local_whisper(audio_file, lang["whisper"])
-                    if transcript:
-                        _append_description(transcript)
-                        st.success("Recording converted to text and added to Complaint Details below.")
-
-
-# --------------------------------------------------------------------------
 # Citizen pages
 # --------------------------------------------------------------------------
 
 
 def render_submit() -> None:
     _inject(_BASE_CSS)
-    st.markdown(_panel_title("📝", "Submit a Complaint"), unsafe_allow_html=True)
-    st.caption("Select your location on the map and fill in the issue details.")
-    with st.container(key="mka_form_card"):
-        _render_submit_form()
-
-
-def _render_submit_form() -> None:
-
-    # Clear the form after a successful submission (done before the widgets exist).
-    if st.session_state.pop("mka_clear_form", False):
-        st.session_state["mka_description"] = ""
-        st.session_state["mka_location_name"] = ""
-        st.session_state["mka_category"] = COMPLAINT_CATEGORIES[0]
-    st.session_state.setdefault("mka_description", "")
-
-    flash = st.session_state.pop("mka_submit_flash", None)
-    if flash:
-        st.success(flash)
+    st.markdown("<h2 style='color:white;'>📝 Submit a Complaint</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='color:#e2e8f0;'>Type a village or area name (like <b>Chennai</b> or <b>Saidapet</b>) to auto-detect coordinates, or click the map to pin an exact spot.</p>",
+        unsafe_allow_html=True,
+    )
 
     default_lat, default_lon = DEFAULT_MAP_CENTER
     selected_lat, selected_lon = None, None
@@ -717,47 +541,43 @@ def _render_submit_form() -> None:
             selected_lon = map_data["last_clicked"]["lng"]
             st.success(f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
 
-    # Voice input runs first so recognised text can be placed in the
-    # description box before that widget is created on this run.
-    _render_voice_input()
+    with st.form("submit_form"):
+        category = st.selectbox("Category", COMPLAINT_CATEGORIES)
+        location_name = st.text_input("Village / Area Name", placeholder="e.g., Chennai, Saidapet")
+        description = st.text_area("Complaint Details")
+        if st.form_submit_button("Submit Complaint", type="primary", use_container_width=True):
+            if not description.strip():
+                st.error("Please provide complaint details.")
+            else:
+                final_lat, final_lon = selected_lat, selected_lon
+                clean_loc = location_name.strip()
+                if (final_lat is None or final_lon is None) and clean_loc:
+                    auto_lat, auto_lon = resolve_coordinates(clean_loc)
+                    if auto_lat is not None and auto_lon is not None:
+                        final_lat, final_lon = auto_lat, auto_lon
 
-    category = st.selectbox("Category", COMPLAINT_CATEGORIES, key="mka_category")
-    location_name = st.text_input("Village / Area Name", key="mka_location_name")
-    description = st.text_area(
-        "Complaint Details",
-        height=150,
-        key="mka_description",
-        help="Type your complaint, or use the microphone above and edit the recognised text here.",
-    )
-
-    if st.button("Submit Complaint", type="primary", use_container_width=True, key="mka_submit_button"):
-        if not description.strip():
-            st.error("Please provide complaint details using voice or text.")
-        else:
-            trk_id = f"MKAI-{secrets.randbelow(900000) + 100000}"
-            payload = {
-                "tracking_id": trk_id,
-                "category": category,
-                "description": description.strip(),
-                "location": location_name.strip(),
-                "latitude": selected_lat,
-                "longitude": selected_lon,
-                "status": "Submitted",
-            }
-            if save_complaint(payload):
-                st.session_state["mka_submit_flash"] = f"Complaint registered successfully! Tracking ID: **{trk_id}**"
-                st.session_state["mka_clear_form"] = True
-                st.rerun()
+                trk_id = f"MKAI-{secrets.randbelow(900000) + 100000}"
+                payload = {
+                    "tracking_id": trk_id,
+                    "category": category,
+                    "description": description.strip(),
+                    "location": clean_loc or "Not provided",
+                    "latitude": final_lat,
+                    "longitude": final_lon,
+                    "status": "Submitted",
+                }
+                if save_complaint(payload):
+                    coord_msg = (
+                        f" · Coordinates: {final_lat:.4f}, {final_lon:.4f}"
+                        if final_lat is not None and final_lon is not None
+                        else ""
+                    )
+                    st.success(f"Complaint registered successfully! Tracking ID: **{trk_id}**{coord_msg}")
 
 
 def render_tracking() -> None:
     _inject(_BASE_CSS)
-    st.markdown(_panel_title("🔎", "Track Complaint Status"), unsafe_allow_html=True)
-    with st.container(key="mka_form_card"):
-        _render_tracking_body()
-
-
-def _render_tracking_body() -> None:
+    st.markdown("<h2 style='color:white;'>🔎 Track Complaint Status</h2>", unsafe_allow_html=True)
     tracking_id = st.text_input("Enter your Tracking ID").strip()
     if tracking_id:
         records = get_complaint_by_tracking_id(tracking_id)
@@ -822,14 +642,11 @@ def render_public() -> None:
 
     left, right = st.columns([5, 7])
     with left:
-        st.markdown(
-            '<div class="mka-card-head" style="color:#fff">Recent Complaints Table</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="mka-card-head" style="color:#fff">Recent Complaints Table</div>', unsafe_allow_html=True)
         if filtered:
             st.markdown(_public_table_html(filtered), unsafe_allow_html=True)
             if len(filtered) > PUBLIC_TABLE_ROWS:
-                st.caption(f"Showing the latest {PUBLIC_TABLE_ROWS} of {len(filtered)} matching complaints. Use search to narrow the list.")
+                st.caption(f"Showing the latest {PUBLIC_TABLE_ROWS} of {len(filtered)} matching complaints.")
             else:
                 st.caption(f"{len(filtered)} complaint(s).")
         else:
@@ -840,7 +657,7 @@ def render_public() -> None:
 
 
 # --------------------------------------------------------------------------
-# Admin login
+# Admin login & dashboard
 # --------------------------------------------------------------------------
 
 
@@ -854,171 +671,72 @@ def _keys_match(supplied: str, expected: str) -> bool:
     return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
 
-
 def _render_admin_login() -> None:
-
     _inject(_BASE_CSS, _LOGIN_CSS)
-
     now = time.time()
 
-    # Reset lockout after timeout
-    if (
-        st.session_state["mka_lockout_until"]
-        and now >= st.session_state["mka_lockout_until"]
-    ):
+    if st.session_state["mka_lockout_until"] and now >= st.session_state["mka_lockout_until"]:
         st.session_state["mka_lockout_until"] = 0.0
         st.session_state["mka_failed_attempts"] = 0
 
     locked = now < st.session_state["mka_lockout_until"]
+    remaining = int(math.ceil(st.session_state["mka_lockout_until"] - now)) if locked else 0
 
-    remaining = (
-        int(math.ceil(
-            st.session_state["mka_lockout_until"] - now
-        ))
-        if locked else 0
-    )
-
-    # Read key securely on Python server
     expected = get_setting("ADMIN_ACCESS_KEY")
-
-    configured = (
-        len(expected) == 6
-        and expected.isdigit()
-    )
-
+    configured = len(expected) == 6 and expected.isdigit()
     disabled = locked or not configured
 
-    badge = (
-        "Locked" if locked
-        else "Not configured" if not configured
-        else "Awaiting Key"
-    )
-
+    badge = "Locked" if locked else "Not configured" if not configured else "Awaiting Key"
     st.markdown(
-        _panel_title(
-            "🔒",
-            "Admin Verification",
-            badge,
-            "locked" if disabled else ""
-        ),
-        unsafe_allow_html=True
+        _panel_title("🔒", "Admin Verification", badge, "locked" if disabled else ""),
+        unsafe_allow_html=True,
     )
 
-    # Sunset background
     with st.container(key="mka_login_scene"):
+        component_key = f"mka_admin_otp_component_{st.session_state['mka_failed_attempts']}"
+        result = otp_input(disabled=disabled, key=component_key)
 
-        # Change component key after a failed attempt
-        component_key = (
-            "mka_admin_otp_component_"
-            f"{st.session_state['mka_failed_attempts']}"
-        )
-
-        result = otp_input(
-            disabled=disabled,
-            key=component_key
-        )
-
-    # Configuration check
     if not configured:
-
-        st.error(
-            "Admin access is not configured. "
-            "Set ADMIN_ACCESS_KEY to a six-digit number "
-            "in Render environment variables or "
-            "Streamlit secrets."
-        )
-
+        st.error("Admin access is not configured. Set ADMIN_ACCESS_KEY to a six-digit number.")
         return
 
-    # Lockout check
     if locked:
-
-        st.error(
-            f"Too many incorrect attempts. "
-            f"Try again in {remaining} seconds."
-        )
-
+        st.error(f"Too many incorrect attempts. Try again in {remaining} seconds.")
         return
 
-    # Wait for Confirm
     if not isinstance(result, dict) or not result.get("submitted"):
         return
 
     code = str(result.get("code", "")).strip()
-
-    # Validate code
     if len(code) != 6 or not code.isdigit():
-
-        st.warning(
-            "Please enter all 6 digits of the access key."
-        )
-
+        st.warning("Please enter all 6 digits of the access key.")
     elif _keys_match(code, expected):
-
-        # Successful authentication
         st.session_state["mka_admin_authenticated"] = True
-
         st.session_state["mka_failed_attempts"] = 0
-
         st.session_state["mka_lockout_until"] = 0.0
-
         st.rerun()
-
     else:
-
-        # Incorrect key
         st.session_state["mka_failed_attempts"] += 1
-
         attempts = st.session_state["mka_failed_attempts"]
-
         if attempts >= MAX_FAILED_ATTEMPTS:
-
-            st.session_state["mka_lockout_until"] = (
-                time.time() + LOCKOUT_SECONDS
-            )
-
-            st.error(
-                f"Maximum attempts exceeded. "
-                f"Locked for {LOCKOUT_SECONDS} seconds."
-            )
-
+            st.session_state["mka_lockout_until"] = time.time() + LOCKOUT_SECONDS
+            st.error(f"Maximum attempts exceeded. Locked for {LOCKOUT_SECONDS} seconds.")
         else:
-
-            st.error(
-                f"Incorrect access key. "
-                f"({attempts}/{MAX_FAILED_ATTEMPTS} failed attempts)"
-            )
-
-# --------------------------------------------------------------------------
-# Admin dashboard
-# --------------------------------------------------------------------------
-
-
-def _admin_table_html(records: list[dict]) -> str:
-    head = "<tr><th>ID</th><th>Category</th><th>Description</th><th>Location</th><th>Status</th><th>Reported</th></tr>"
-    body = []
-    for r in records:
-        description = r["_description"]
-        body.append(
-            f'<tr><td class="id">{_esc(r["_tracking_id"])}</td><td>{_esc(r["_category"])}</td>'
-            f'<td title="{_esc(" ".join(description.split()))}">{_esc(_shorten(description, 80)) or "—"}</td>'
-            f'<td>{_esc(r["_location"])}</td><td>{_pill(r)}</td><td class="muted">{_esc(_date_label(r, True))}</td></tr>'
-        )
-    return f'<div class="mka-tablewrap"><table class="mka-table"><thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>'
+            st.error(f"Incorrect access key. ({attempts}/{MAX_FAILED_ATTEMPTS} failed attempts)")
 
 
 def _render_update_form(selected: dict) -> None:
     tid = selected["_tracking_id"]
     coords = (
         f'{selected["_latitude"]:.5f}, {selected["_longitude"]:.5f}'
-        if selected["_latitude"] is not None
+        if selected["_latitude"] is not None and selected["_longitude"] is not None
         else "not saved"
     )
     st.markdown(
         '<div class="mka-card">'
         f'<div class="mka-card-head"><span>{_esc(tid)} · {_esc(selected["_category"])}</span>{_pill(selected)}</div>'
         f'<div style="font-size:13px;color:#334155"><b>Location:</b> {_esc(selected["_location"])} '
-        f'&nbsp;·&nbsp; <b>Coordinates:</b> {_esc(coords)} &nbsp;·&nbsp; <b>Reported:</b> {_esc(_date_label(selected, True))}</div>'
+        f"&nbsp;·&nbsp; <b>Coordinates:</b> {_esc(coords)} &nbsp;·&nbsp; <b>Reported:</b> {_esc(_date_label(selected, True))}</div>"
         f'<div style="font-size:14px;margin-top:8px;color:#0f172a">{_esc(selected["_description"]) or "No description provided."}</div>'
         "</div>",
         unsafe_allow_html=True,
@@ -1029,117 +747,11 @@ def _render_update_form(selected: dict) -> None:
         options.append(selected["_status"])
     with st.form(f"mka_update_{tid}"):
         new_status = st.selectbox("New status", options, index=options.index(selected["_status"]))
-        notes = st.text_area("Resolution notes (optional)", value=selected["_resolution_notes"])
+        notes = st.text_area("Resolution notes", value=selected["_resolution_notes"])
         if st.form_submit_button("Save update", type="primary"):
             if update_status(tid, new_status, notes):
-                st.session_state["mka_flash"] = f"{tid} updated to {new_status}."
+                st.success("Status updated.")
                 st.rerun()
-
-
-def _render_admin_dashboard() -> None:
-    _inject(_BASE_CSS)
-
-    title_col, logout_col = st.columns([5, 1], vertical_alignment="center")
-    with title_col:
-        st.markdown(_panel_title("📊", "Admin Dashboard & Analytics"), unsafe_allow_html=True)
-    with logout_col:
-        if st.button("Log out", use_container_width=True, key="mka_logout"):
-            st.session_state["mka_admin_authenticated"] = False
-            st.session_state.pop("mka_flash", None)
-            st.rerun()
-
-    flash = st.session_state.pop("mka_flash", None)
-    if flash:
-        st.success(flash)
-
-    all_records = _load_records()
-    if all_records is None:
-        return
-    if not all_records:
-        st.info("No complaints have been submitted yet. Statistics will appear after the first report.")
-        return
-
-    # ---- Region filter + statistics -------------------------------------
-    regions = ["All regions"] + _region_options(all_records)
-    region_choice = st.selectbox("Region", regions, key="mka_region")
-    records = (
-        all_records
-        if region_choice == "All regions"
-        else [r for r in all_records if r["_region"].casefold() == region_choice.casefold()]
-    )
-
-    total = len(records)
-    pending = sum(1 for r in records if r["_bucket"] == "Pending")
-    progress = sum(1 for r in records if r["_bucket"] == "In Progress")
-    resolved = sum(1 for r in records if r["_bucket"] == "Resolved")
-    other = total - pending - progress - resolved
-    rate = round(resolved / total * 100) if total else 0
-
-    categories = _group_counts([r["_category"] for r in records])
-    chart_items = categories[:6]
-    if len(categories) > 6:
-        chart_items.append(("Others", sum(n for _, n in categories[6:])))
-    points, undated = _trend_points(records)
-
-    notes = []
-    if other:
-        notes.append(f"{other} complaint(s) use a custom status and are counted only in Total Reports.")
-    if undated:
-        notes.append(f"{undated} complaint(s) have no recorded date and are not in the trend.")
-    note_html = f'<div class="mka-note">{_esc(" ".join(notes))}</div>' if notes else ""
-
-    st.markdown(
-        '<div class="mka-sheet">'
-        + _kpi_html(total, pending, progress, resolved, rate)
-        + '<div class="mka-grid2">'
-        f'<div class="mka-card"><div class="mka-card-head"><span>Complaints by Category</span></div>{_bar_chart_svg(chart_items)}</div>'
-        '<div class="mka-card"><div class="mka-card-head"><span>Progress Trend · reports received</span><small>Last 7 days</small></div>'
-        f"{_line_chart_svg(points)}</div></div>{note_html}</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---- Complaint status management ------------------------------------
-    st.markdown('<div class="mka-section">Complaint Status Management</div>', unsafe_allow_html=True)
-    f1, f2, f3, f4 = st.columns([3, 2, 2, 1])
-    search = f1.text_input("Search", placeholder="Search by ID, category, area or description", key="mka_search")
-    status_choice = f2.selectbox("Status", ["All", "Pending", "In Progress", "Resolved", "Other"], key="mka_status_filter")
-    category_choice = f3.selectbox("Category", ["All"] + [label for label, _ in categories], key="mka_category_filter")
-    page_size = f4.selectbox("Rows", [10, 25, 50, 100], index=1, key="mka_page_size")
-
-    needle = search.strip().casefold()
-    filtered = [
-        r
-        for r in records
-        if _matches(r, needle, True)
-        and (status_choice == "All" or r["_bucket"] == status_choice)
-        and (category_choice == "All" or r["_category"].casefold() == category_choice.casefold())
-    ]
-
-    if not filtered:
-        st.info("No complaints match your search or filters.")
-    else:
-        pages = max(1, math.ceil(len(filtered) / page_size))
-        page = 1
-        if pages > 1:
-            page = int(st.number_input("Page", min_value=1, max_value=pages, value=1, step=1, key="mka_page"))
-        start = (page - 1) * page_size
-        st.markdown(_admin_table_html(filtered[start : start + page_size]), unsafe_allow_html=True)
-        st.caption(f"Showing {start + 1}–{min(start + page_size, len(filtered))} of {len(filtered)} complaint(s).")
-
-        st.markdown('<div class="mka-section">Update a Complaint</div>', unsafe_allow_html=True)
-        by_id = {r["_tracking_id"]: r for r in filtered}
-        selected_id = st.selectbox(
-            "Select complaint",
-            list(by_id.keys()),
-            format_func=lambda tid: f'{tid} · {by_id[tid]["_category"]} ({by_id[tid]["_status"]})',
-            key="mka_selected",
-        )
-        _render_update_form(by_id[selected_id])
-
-    # ---- Map -------------------------------------------------------------
-    st.markdown('<div class="mka-section">Live Complaint Map</div>', unsafe_allow_html=True)
-    st.markdown(_legend_html(), unsafe_allow_html=True)
-    show_map(filtered, height=450, key="admin_map", show_description=True)
 
 
 def render_admin() -> None:
@@ -1147,4 +759,42 @@ def render_admin() -> None:
     if not st.session_state["mka_admin_authenticated"]:
         _render_admin_login()
         return
-    _render_admin_dashboard()
+
+    _inject(_BASE_CSS)
+    top_l, top_r = st.columns([6, 1])
+    with top_l:
+        st.markdown(_panel_title("🛡️", "Admin Dashboard"), unsafe_allow_html=True)
+    with top_r:
+        if st.button("Log out", use_container_width=True, key="mka_admin_logout"):
+            st.session_state["mka_admin_authenticated"] = False
+            st.rerun()
+
+    records = _load_records()
+    if records is None:
+        return
+
+    total = len(records)
+    pending = sum(1 for r in records if r["_bucket"] == "Pending")
+    in_progress = sum(1 for r in records if r["_bucket"] == "In Progress")
+    resolved = sum(1 for r in records if r["_bucket"] == "Resolved")
+    pct = int(round((resolved / total) * 100)) if total > 0 else 0
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total Reports", total)
+    m2.metric("Pending", pending)
+    m3.metric("In Progress", in_progress)
+    m4.metric("Resolved", resolved)
+    m5.metric("Completion", f"{pct}%")
+
+    st.markdown("<h4 style='color:white;margin-top:16px;'>📋 Update Complaint Status</h4>", unsafe_allow_html=True)
+    if records:
+        options_map = {
+            f"{r['_tracking_id']} · {r['_category']} · {r['_location']} ({r['_status']})": r
+            for r in records
+        }
+        chosen_label = st.selectbox("Select a complaint", list(options_map.keys()), key="mka_admin_select")
+        _render_update_form(options_map[chosen_label])
+
+    st.markdown("<h4 style='color:white;margin-top:16px;'>🗺️ Complaint Map</h4>", unsafe_allow_html=True)
+    st.markdown(_legend_html(), unsafe_allow_html=True)
+    show_map(records, height=450, key="admin_map", show_description=True)
