@@ -4,15 +4,24 @@ Exports: render_submit(), render_tracking(), render_public(), render_admin()
 
 This module only defines functions. Importing it never renders anything and it
 never calls st.set_page_config() — app.py owns the page configuration.
+
+Voice input (no paid API, no API key):
+  1. Primary  — browser speech recognition via streamlit-mic-recorder
+                (Web Speech API, Tamil ta-IN / English en-IN).
+  2. Backup   — local Whisper (openai-whisper package) running on this server
+                with st.audio_input(). No OpenAI API is ever called.
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import html
 import math
 import os
 import secrets
+import tempfile
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -35,6 +44,11 @@ except ImportError:
     folium = None
     st_folium = None
 
+try:
+    from streamlit_mic_recorder import speech_to_text
+except ImportError:
+    speech_to_text = None
+
 # --------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------
@@ -46,6 +60,19 @@ IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_MAP_CENTER = (13.0827, 80.2707)  # Chennai
 MAX_MAP_MARKERS = 1000
 PUBLIC_TABLE_ROWS = 60
+
+# Voice input languages: browser recognition code and Whisper language code.
+VOICE_LANGUAGES = {
+    "தமிழ் (Tamil)": {"browser": "ta-IN", "whisper": "ta"},
+    "English": {"browser": "en-IN", "whisper": "en"},
+}
+# Local Whisper model. "tiny" is the smallest multilingual model. It can be
+# changed with the optional WHISPER_MODEL setting (tiny, base or small).
+WHISPER_MODELS = ("tiny", "base", "small")
+MAX_AUDIO_BYTES = 15 * 1024 * 1024
+_WHISPER_LOCK = threading.Lock()  # the shared model is used by one request at a time
+
+COMPLAINT_CATEGORIES = ["Water Supply", "Garbage", "Road Damage", "Drainage", "Electricity", "Other"]
 
 # Citizens may write names or phone numbers in the free-text description, so it
 # is hidden on the public page and its map. Admins always see it.
@@ -521,70 +548,166 @@ def _legend_html() -> str:
 
 
 # --------------------------------------------------------------------------
-# Citizen pages (unchanged behaviour, with verified bug fixes only)
+# Voice input (free: browser recognition + local Whisper, no API key)
 # --------------------------------------------------------------------------
-def _transcribe_voice_audio(audio_file) -> str | None:
-    """Transcribe a recorded Tamil/English audio clip with OpenAI Whisper.
 
-    The audio is sent to the OpenAI API for transcription. Only the resulting
-    text is added to the complaint form; this function does not store the
-    original audio file in the database.
+
+def _append_description(text: str) -> None:
+    """Add recognised speech to the description without replacing existing text."""
+    spoken = " ".join(_text(text).split())
+    if not spoken:
+        return
+    existing = _text(st.session_state.get("mka_description"))
+    st.session_state["mka_description"] = f"{existing} {spoken}" if existing else spoken
+
+
+def _whisper_model_name() -> str:
+    name = get_setting("WHISPER_MODEL", "tiny").lower()
+    return name if name in WHISPER_MODELS else "tiny"
+
+
+@st.cache_resource(show_spinner=False)
+def _load_whisper_model(name: str):
+    """Load the local Whisper model once per server process (CPU only).
+
+    The model weights are downloaded for free from the Whisper release files
+    the first time (the Dockerfile pre-downloads them at build time).
+    """
+    import whisper
+
+    return whisper.load_model(name, device="cpu")
+
+
+def _transcribe_local_whisper(audio_file, whisper_lang: str) -> str | None:
+    """Transcribe a recording with Whisper running on this server.
+
+    No OpenAI API, API key or network call is used for transcription. The
+    audio is written to a temporary file that is always deleted afterwards, and
+    only the resulting text is placed in the form.
     """
     if audio_file is None:
         return None
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets.get("OPENAI_API_KEY")
-        except Exception:
-            api_key = None
-
-    if not api_key:
-        st.error(
-            "Voice transcription is not configured. Add OPENAI_API_KEY "
-            "to your deployment environment variables or Streamlit secrets."
-        )
+    audio_bytes = audio_file.getvalue()
+    if not audio_bytes:
+        st.warning("The recording is empty. Please record again.")
+        return None
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        st.warning("The recording is too large. Please record a shorter message.")
         return None
 
     try:
-        from openai import OpenAI
+        import whisper  # noqa: F401  (checks the package is installed)
+    except ImportError:
+        st.error("Local Whisper is not installed on the server. Add 'openai-whisper' to requirements.txt.")
+        return None
 
-        client = OpenAI(api_key=api_key)
-        audio_bytes = audio_file.getvalue()
-        if not audio_bytes:
-            st.warning("The microphone recording is empty. Please record again.")
+    temp_path = None
+    try:
+        with st.spinner("Processing your voice on the server… the first time may take a minute while the model loads."):
+            model = _load_whisper_model(_whisper_model_name())
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+                handle.write(audio_bytes)
+                temp_path = handle.name
+            with _WHISPER_LOCK:
+                result = model.transcribe(temp_path, language=whisper_lang, task="transcribe", fp16=False)
+        transcript = _text(result.get("text") if isinstance(result, dict) else "")
+        if not transcript:
+            st.warning("No speech was detected. Please record again or type your complaint.")
             return None
+        return transcript
+    except FileNotFoundError:
+        st.error("Audio processing needs ffmpeg, which was not found on the server.")
+    except MemoryError:
+        st.error("The server ran out of memory while processing audio. Please type your complaint instead.")
+    except Exception as exc:
+        # Only the error type is shown, never internal details.
+        st.error(f"Voice processing failed ({type(exc).__name__}). Please try again or type your complaint.")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+    return None
 
-        with st.spinner("Transcribing your voice with Whisper..."):
-            result = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=(
-                    audio_file.name or "complaint_audio.wav",
-                    audio_bytes,
-                    audio_file.type or "audio/wav",
-                ),
+
+def _render_voice_input() -> None:
+    """Microphone block. Must run before the description text area is created."""
+    with st.container(border=True):
+        st.markdown("### 🎙️ Speak your complaint")
+        lang_label = st.radio(
+            "Language / மொழி",
+            list(VOICE_LANGUAGES),
+            horizontal=True,
+            key="mka_voice_lang",
+        )
+        lang = VOICE_LANGUAGES[lang_label]
+
+        if speech_to_text is None:
+            st.warning(
+                "Browser voice input is not installed on the server (streamlit-mic-recorder). "
+                "You can use the recording option below or type your complaint."
+            )
+        else:
+            st.caption(
+                "Tap the microphone, allow microphone access if asked, speak, then tap Stop. "
+                "Your words are added to the Complaint Details box below."
+            )
+            spoken = speech_to_text(
+                language=lang["browser"],
+                start_prompt="🎙️ Tap to speak",
+                stop_prompt="⏹️ Listening… tap to stop",
+                just_once=True,
+                use_container_width=True,
+                key=f"mka_stt_{lang['browser']}",
+            )
+            if spoken:
+                _append_description(spoken)
+                st.success("Voice converted to text and added to Complaint Details below. You can edit it before submitting.")
+            st.caption(
+                "Works in Chrome, Edge and recent Safari over HTTPS. Firefox does not support it. "
+                "If nothing happens, click the lock icon beside the web address and allow the microphone, "
+                "or use the recording option below. Browser recognition is done by your browser vendor's "
+                "free speech service, not by this server."
             )
 
-        transcript = (result.text or "").strip()
-        if not transcript:
-            st.warning("Whisper could not detect speech. Please try again or type your complaint.")
-            return None
+        with st.expander("Voice not working? Record here and convert it on the server (local Whisper)"):
+            st.caption(
+                "Free local speech recognition (no API key). Tamil accuracy with the small model is limited, "
+                "so please check the text before submitting."
+            )
+            audio_file = st.audio_input("Record your complaint", key="mka_voice_audio")
+            if audio_file is not None:
+                # Streamlit reruns often; only transcribe each new recording once.
+                signature = hashlib.sha256(audio_file.getvalue()).hexdigest() + lang["whisper"]
+                if st.session_state.get("mka_whisper_signature") != signature:
+                    st.session_state["mka_whisper_signature"] = signature
+                    transcript = _transcribe_local_whisper(audio_file, lang["whisper"])
+                    if transcript:
+                        _append_description(transcript)
+                        st.success("Recording converted to text and added to Complaint Details below.")
 
-        return transcript
 
-    except ImportError:
-        st.error("The OpenAI Python package is missing. Add 'openai' to requirements.txt.")
-    except Exception as exc:
-        # Do not expose API keys or request headers in the UI.
-        st.error(f"Voice transcription failed: {type(exc).__name__}. Please try again or type your complaint.")
-
-    return None
+# --------------------------------------------------------------------------
+# Citizen pages
+# --------------------------------------------------------------------------
 
 
 def render_submit() -> None:
     st.title("📝 Submit a Complaint")
     st.caption("Select your location on the map and fill in the issue details.")
+
+    # Clear the form after a successful submission (done before the widgets exist).
+    if st.session_state.pop("mka_clear_form", False):
+        st.session_state["mka_description"] = ""
+        st.session_state["mka_location_name"] = ""
+        st.session_state["mka_category"] = COMPLAINT_CATEGORIES[0]
+    st.session_state.setdefault("mka_description", "")
+
+    flash = st.session_state.pop("mka_submit_flash", None)
+    if flash:
+        st.success(flash)
 
     default_lat, default_lon = DEFAULT_MAP_CENTER
     selected_lat, selected_lon = None, None
@@ -598,60 +721,37 @@ def render_submit() -> None:
             selected_lon = map_data["last_clicked"]["lng"]
             st.success(f"Selected Coordinates: Lat {selected_lat:.5f}, Lon {selected_lon:.5f}")
 
-    # Voice recording is outside st.form so Streamlit can process the audio
-    # immediately when the user finishes recording.
-    st.markdown("### 🎙️ Voice Complaint (Tamil / English)")
-    st.caption("Record your complaint. Whisper will convert your speech into text, which you can review before submitting.")
+    # Voice input runs first so recognised text can be placed in the
+    # description box before that widget is created on this run.
+    _render_voice_input()
 
-    audio_file = st.audio_input(
-        "Tap the microphone and speak your complaint",
-        key="mka_voice_audio",
+    category = st.selectbox("Category", COMPLAINT_CATEGORIES, key="mka_category")
+    location_name = st.text_input("Village / Area Name", key="mka_location_name")
+    description = st.text_area(
+        "Complaint Details",
+        height=150,
+        key="mka_description",
+        help="Type your complaint, or use the microphone above and edit the recognised text here.",
     )
 
-    if audio_file is not None:
-        # Avoid calling Whisper repeatedly on every Streamlit rerun.
-        audio_signature = secrets.token_hex(1)  # unique rerun guard is stored below
-        current_audio = audio_file.getvalue()
-        import hashlib
-        audio_signature = hashlib.sha256(current_audio).hexdigest()
-
-        if st.session_state.get("mka_transcribed_audio_signature") != audio_signature:
-            transcript = _transcribe_voice_audio(audio_file)
-            if transcript:
-                st.session_state["mka_voice_transcript"] = transcript
-                st.session_state["mka_transcribed_audio_signature"] = audio_signature
-                st.success("Voice converted to text. Review or edit it below.")
-
-    with st.form("submit_form"):
-        category = st.selectbox(
-            "Category",
-            ["Water Supply", "Garbage", "Road Damage", "Drainage", "Electricity", "Other"],
-        )
-        location_name = st.text_input("Village / Area Name")
-        description = st.text_area(
-            "Complaint Details",
-            value=st.session_state.get("mka_voice_transcript", ""),
-            height=150,
-            help="You can type a complaint or edit the text recognized from your voice recording.",
-        )
-        if st.form_submit_button("Submit Complaint", type="primary", use_container_width=True):
-            if not description.strip():
-                st.error("Please provide complaint details using voice or text.")
-            else:
-                trk_id = f"MKAI-{secrets.randbelow(900000) + 100000}"
-                payload = {
-                    "tracking_id": trk_id,
-                    "category": category,
-                    "description": description.strip(),
-                    "location": location_name.strip(),
-                    "latitude": selected_lat,
-                    "longitude": selected_lon,
-                    "status": "Submitted",
-                }
-                if save_complaint(payload):
-                    st.success(f"Complaint registered successfully! Tracking ID: **{trk_id}**")
-                    st.session_state.pop("mka_voice_transcript", None)
-                    st.session_state.pop("mka_transcribed_audio_signature", None)
+    if st.button("Submit Complaint", type="primary", use_container_width=True, key="mka_submit_button"):
+        if not description.strip():
+            st.error("Please provide complaint details using voice or text.")
+        else:
+            trk_id = f"MKAI-{secrets.randbelow(900000) + 100000}"
+            payload = {
+                "tracking_id": trk_id,
+                "category": category,
+                "description": description.strip(),
+                "location": location_name.strip(),
+                "latitude": selected_lat,
+                "longitude": selected_lon,
+                "status": "Submitted",
+            }
+            if save_complaint(payload):
+                st.session_state["mka_submit_flash"] = f"Complaint registered successfully! Tracking ID: **{trk_id}**"
+                st.session_state["mka_clear_form"] = True
+                st.rerun()
 
 
 def render_tracking() -> None:
