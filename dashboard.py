@@ -1064,8 +1064,7 @@ def _render_admin_notifications(records: list[dict]) -> None:
                 <small style="background:#1e293b;color:#93c5fd;">{len(pending_rows)} Pending</small>
             </div>
             {summary_html}
-            <hr style="border-color:rgba(148,163,184,0.2);margin:10px 0;">
-            <div style="font-size:12px;font-weight:700;color:#94a3b8;margin-bottom:4px;">LATEST ACTIVITY</div>
+            <div style="font-size:12px;font-weight:700;color:#94a3b8;margin:12px 0 4px;">LATEST ACTIVITY</div>
             {recent_items}
         </div>
         """,
