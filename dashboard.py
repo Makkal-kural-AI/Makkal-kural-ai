@@ -479,18 +479,63 @@ _BASE_CSS = """
 .mka-hero-fill{height:100%;background:#4ade80;border-radius:999px}
 
 /* Submit page high-contrast readability */
-.mka-submit-header h1{color:#ffffff !important;font-weight:900 !important;text-shadow:0 2px 10px rgba(0,0,0,0.75) !important;margin-bottom:4px !important;}
-.mka-submit-sub{color:#f1f5f9 !important;font-size:15px !important;font-weight:500 !important;text-shadow:0 1px 6px rgba(0,0,0,0.75) !important;margin-bottom:14px !important;}
-[data-testid="stVerticalBlockBorderWrapper"]{background:rgba(10,25,47,0.86) !important;border:1px solid rgba(197,228,255,0.45) !important;border-radius:16px !important;color:#ffffff !important;}
+.mka-submit-header h1 {
+    color: #ffffff !important;
+    font-weight: 900 !important;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8) !important;
+    margin-bottom: 4px !important;
+}
+.mka-submit-sub {
+    color: #f8fafc !important;
+    font-size: 15px !important;
+    font-weight: 500 !important;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8) !important;
+    margin-bottom: 14px !important;
+}
+
+/* Voice container card */
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background-color: rgba(11, 25, 44, 0.92) !important;
+    border-radius: 16px !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border: 1px solid rgba(197, 228, 255, 0.55) !important;
+}
+
+/* Every heading, label, radio option, and caption inside the card */
+[data-testid="stVerticalBlockBorderWrapper"] h1,
+[data-testid="stVerticalBlockBorderWrapper"] h2,
 [data-testid="stVerticalBlockBorderWrapper"] h3,
 [data-testid="stVerticalBlockBorderWrapper"] p,
 [data-testid="stVerticalBlockBorderWrapper"] span,
-[data-testid="stVerticalBlockBorderWrapper"] label{color:#f8fafc !important;}
+[data-testid="stVerticalBlockBorderWrapper"] label,
+[data-testid="stVerticalBlockBorderWrapper"] div[role="radiogroup"] label p,
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"],
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] * {
+    color: #f8fafc !important;
+    opacity: 1 !important;
+}
+
+/* Expander header & body */
+[data-testid="stExpander"],
+[data-testid="stExpander"] details,
 [data-testid="stExpander"] summary,
 [data-testid="stExpander"] summary span,
-[data-testid="stExpander"] p{color:#f8fafc !important;}
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background-color: rgba(15, 33, 58, 0.94) !important;
+    color: #ffffff !important;
+    border-color: rgba(197, 228, 255, 0.35) !important;
+}
 
-[data-testid="stWidgetLabel"] p{color:#ffffff !important;font-weight:600 !important;text-shadow:0 1px 4px rgba(0,0,0,0.65) !important;}
+/* Form field labels outside the card */
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] span {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8) !important;
+}
 @media (max-width:900px){.mka-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mka-kpi.donut{grid-column:1/-1}.mka-grid2{grid-template-columns:1fr}}
 </style>
 """
