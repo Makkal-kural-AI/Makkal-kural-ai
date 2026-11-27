@@ -965,10 +965,7 @@ def _render_voice_input() -> None:
                 "You can use the recording option below or type your complaint."
             )
         else:
-            st.caption(
-                "Tap the microphone, allow microphone access if asked, speak, then tap Stop. "
-                "Your words are added to the Complaint Details box below."
-            )
+            
             spoken = speech_to_text(
                 language=lang["browser"],
                 start_prompt="🎙️ Tap to speak",
@@ -980,13 +977,7 @@ def _render_voice_input() -> None:
             if spoken:
                 _append_description(spoken)
                 st.success("Voice converted to text and added to Complaint Details below. You can edit it before submitting.")
-            st.caption(
-                "Works in Chrome, Edge and recent Safari over HTTPS. Firefox does not support it. "
-                "If nothing happens, click the lock icon beside the web address and allow the microphone, "
-                "or use the recording option below. Browser recognition is done by your browser vendor's "
-                "free speech service, not by this server."
-            )
-
+            
         with st.expander("Voice not working? Record here and convert it on the server (local Whisper)"):
             st.caption(
                 "Free local speech recognition (no API key). Tamil accuracy with the small model is limited, "
