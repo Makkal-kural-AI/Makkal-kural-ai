@@ -1,6 +1,7 @@
 """
 Makkal Kural AI — UI Dashboard Modules
-Exports: render_submit(), render_tracking(), render_public(), render_admin()
+Exports: render_submit(), render_tracking(), render_public(), render_admin(),
+         render_notifications_banner()
 
 This module only defines functions. Importing it never renders anything and it
 never calls st.set_page_config() — app.py owns the page configuration.
@@ -765,6 +766,51 @@ def render_tracking() -> None:
                     st.info(f"**Resolution Notes:** {r['_resolution_notes']}")
         else:
             st.warning("No complaint found matching that Tracking ID.")
+
+
+# --------------------------------------------------------------------------
+# Home page notifications banner
+# --------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _recent_resolved_notices(limit: int = 3) -> list[tuple[str, str, str]]:
+    """Newest resolved complaints as (tracking id, category, area). Public fields only."""
+    if not database_configured():
+        return []
+    rows, error = fetch_complaints()
+    if error:
+        return []
+    resolved = [r for r in (normalise_record(item) for item in rows) if r["_bucket"] == "Resolved"]
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    resolved.sort(key=lambda r: r["_created_at"] or floor, reverse=True)
+    return [(r["_tracking_id"], r["_category"], r["_location"]) for r in resolved[:limit]]
+
+
+def render_notifications_banner() -> None:
+    """Small banner on the Home page listing recently resolved complaints.
+
+    It never raises: if the database is unavailable or nothing is resolved yet,
+    it shows nothing. Descriptions are never shown here.
+    """
+    try:
+        notices = _recent_resolved_notices()
+    except Exception:
+        return
+    if not notices:
+        return
+    items = " &nbsp;·&nbsp; ".join(
+        f"<b>{_esc(tid)}</b> ({_esc(category)}"
+        + (f", {_esc(area)}" if area != "Not provided" else "")
+        + ")"
+        for tid, category, area in notices
+    )
+    st.markdown(
+        '<div style="background:rgba(22,163,74,.18);border:1px solid rgba(134,239,172,.55);'
+        'border-radius:12px;padding:10px 16px;margin:6px 0 10px;color:#fff;font-size:14px;">'
+        f"✅ Recently resolved: {items}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------------
