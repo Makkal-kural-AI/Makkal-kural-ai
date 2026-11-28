@@ -1,0 +1,5 @@
+flask
+gunicorn
+openai-whisper
+gTTS
+supabase>=2.0.0,<3

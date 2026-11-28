@@ -17,3 +17,21 @@ services:
         sync: false
       - key: WHISPER_MODEL
         value: tiny
+
+  # API used by the ESP32 device (the Streamlit app cannot accept raw POSTs)
+  - type: web
+    name: makkal-kural-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DEVICE_TOKEN
+        sync: false
+      - key: WHISPER_MODEL
+        value: tiny
